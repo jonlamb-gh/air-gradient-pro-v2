@@ -1,0 +1,13 @@
+[package]
+name = "env-config"
+version = "0.1.0"
+edition = "2021"
+authors = ["Jon Lamb"]
+
+[dependencies.embassy-net]
+version = "0.4.0"
+default-features = false
+features = ["medium-ethernet", "proto-ipv4", "udp"]
+
+[dependencies.wire-protocols]
+path = "../wire-protocols"

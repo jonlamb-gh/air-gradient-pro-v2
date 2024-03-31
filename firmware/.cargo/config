@@ -1,0 +1,13 @@
+[build]
+target = "thumbv7em-none-eabihf"
+
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-rs run --chip STM32F407ZGTx"
+
+[target.thumbv7em-none-eabihf]
+rustflags = [
+  "-C", "linker=flip-link",
+]
+
+[env]
+DEFMT_LOG = "info,air_gradient_pro=debug"
