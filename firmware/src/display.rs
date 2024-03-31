@@ -2,6 +2,7 @@ use crate::config;
 use core::fmt::{self, Write as FmtWrite};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::I2cDeviceError;
+use embassy_net::{EthernetAddress, Ipv4Address};
 use embassy_stm32::{i2c, peripherals};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embedded_graphics::{
@@ -42,8 +43,8 @@ pub enum Error {
 pub struct SystemInfo {
     pub device_id: DeviceId,
     pub firmware_version: FirmwareVersion,
-    //pub ip: Ipv4Address,
-    //pub mac: EthernetAddress,
+    pub ip: Ipv4Address,
+    pub mac: EthernetAddress,
     pub device_serial_number: DeviceSerialNumber,
 }
 
@@ -52,8 +53,8 @@ impl SystemInfo {
         Self {
             device_id: config::DEVICE_ID,
             firmware_version: config::FIRMWARE_VERSION,
-            //ip: config::IP_CIDR.address(),
-            //mac: EthernetAddress(config::MAC_ADDRESS),
+            ip: config::IP_CIDR.address(),
+            mac: EthernetAddress(config::MAC_ADDRESS),
             device_serial_number: DeviceSerialNumber::zero(),
         }
     }
@@ -182,7 +183,6 @@ where
         )
         .draw(&mut self.drv)?;
 
-        /*
         self.line_buf.clear();
         write!(&mut self.line_buf, "IP: {}", view.ip)?;
         Text::with_baseline(
@@ -202,7 +202,6 @@ where
             Baseline::Top,
         )
         .draw(&mut self.drv)?;
-        */
 
         let text_style = MonoTextStyleBuilder::new()
             .font(&DEVID_FONT)

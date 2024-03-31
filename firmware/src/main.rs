@@ -17,6 +17,7 @@ use embassy_stm32::{
     rng::{self, Rng},
     time::Hertz,
     usart::{self, Uart},
+    wdg::IndependentWatchdog,
     Config,
 };
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -32,6 +33,7 @@ use crate::{
     drivers::sht31::DefaultSht31,
     tasks::data_manager::{data_manager_task, DataManagerTaskState},
     tasks::display::{display_task, DisplayTaskState, MessageChannel as DisplayMessageChannel},
+    tasks::led_heartbeat::{led_heartbeat_task, LedHeartbeatTaskState},
     tasks::net::{net_task, Device as NetDevice},
     tasks::pms5003::{pms5003_task, Pms5003TaskState},
     tasks::s8lp::{s8lp_task, S8LpTaskState},
@@ -101,6 +103,11 @@ async fn main(spawner: Spawner) {
     }
     let p = embassy_stm32::init(config);
 
+    let mut wdt = IndependentWatchdog::new(p.IWDG, config::WATCHDOG_TIMEOUT_MS * 1_000);
+    wdt.unleash();
+    let mut led = Output::new(p.PC13, Level::High, Speed::Low);
+    led.set_high();
+
     info!("############################################################");
     info!(
         "{} {} ({})",
@@ -137,12 +144,18 @@ async fn main(spawner: Spawner) {
     */
     info!("############################################################");
 
-    // TODO - watchdog will need this to be split up
     info!(
         "Setup: startup delay {} seconds",
         config::STARTUP_DELAY_SECONDS
     );
-    Timer::after_secs(config::STARTUP_DELAY_SECONDS as _).await;
+    for _ in 0..config::STARTUP_DELAY_SECONDS {
+        for _ in 0..10 {
+            wdt.pet();
+            led.toggle();
+            Timer::after_millis(100).await;
+        }
+    }
+    led.set_low();
 
     // Setup channels
     let sht31_raw_measurement_channel =
@@ -280,6 +293,7 @@ async fn main(spawner: Spawner) {
         &mut udp_storage.tx_buffer,
     );
 
+    wdt.pet();
     spawner.spawn(net_task(stack)).unwrap();
     // TODO use embassy_futures select with timeout
     stack.wait_config_up().await;
@@ -290,6 +304,9 @@ async fn main(spawner: Spawner) {
         bcast_socket,
     );
 
+    let hb_state = LedHeartbeatTaskState::new(wdt, led);
+
+    spawner.spawn(led_heartbeat_task(hb_state)).unwrap();
     spawner.spawn(data_manager_task(dm_state)).unwrap();
     spawner.spawn(display_task(display_state)).unwrap();
     spawner.spawn(s8lp_task(s8lp_state)).unwrap();

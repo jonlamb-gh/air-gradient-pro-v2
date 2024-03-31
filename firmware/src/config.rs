@@ -12,7 +12,7 @@ pub const DEVICE_PROTO_SOCKET_BUFFER_LEN: usize = wire_protocols::device::SOCKET
 
 pub const STARTUP_DELAY_SECONDS: u8 = 5;
 
-pub const WATCHDOG_RESET_PERIOD_MS: u64 = 8000;
+pub const WATCHDOG_TIMEOUT_MS: u32 = 8000;
 pub const WATCHDOG_TASK_INTERVAL_MS: u64 = 1000;
 
 pub const SGP41_MEASUREMENT_INTERVAL_MS: u64 = 1000;
