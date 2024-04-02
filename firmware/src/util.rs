@@ -12,6 +12,7 @@ pub(crate) fn read_device_serial_number() -> DeviceSerialNumber {
     DeviceSerialNumber::new(word0, word1, word2)
 }
 
+// TODO
 /*
 pub(crate) fn device_info(active_boot_slot: BootSlot, reset_reason: ResetReason) -> DeviceInfo {
     DeviceInfo {

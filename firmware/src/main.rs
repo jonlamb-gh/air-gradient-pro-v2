@@ -31,6 +31,7 @@ use crate::{
     drivers::s8lp::DefaultS8Lp,
     drivers::sgp41::DefaultSgp41,
     drivers::sht31::DefaultSht31,
+    reset_reason::ResetReason,
     tasks::data_manager::{data_manager_task, DataManagerTaskState},
     tasks::display::{display_task, DisplayTaskState, MessageChannel as DisplayMessageChannel},
     tasks::led_heartbeat::{led_heartbeat_task, LedHeartbeatTaskState},
@@ -45,6 +46,7 @@ mod common;
 mod config;
 mod display;
 mod drivers;
+mod reset_reason;
 mod tasks;
 mod util;
 
@@ -79,7 +81,8 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    // TODO - watchdog
+    #[allow(const_item_mutation)]
+    let reset_reason = ResetReason::read_and_clear(&mut embassy_stm32::pac::RCC);
 
     let mut config = Config::default();
     {
@@ -105,6 +108,8 @@ async fn main(spawner: Spawner) {
 
     let mut wdt = IndependentWatchdog::new(p.IWDG, config::WATCHDOG_TIMEOUT_MS * 1_000);
     wdt.unleash();
+
+    // active-low
     let mut led = Output::new(p.PC13, Level::High, Speed::Low);
     led.set_high();
 
@@ -137,9 +142,9 @@ async fn main(spawner: Spawner) {
         Ipv4Address(config::BROADCAST_ADDRESS)
     );
     info!("Device protocol port: {}", config::DEVICE_PORT);
+    info!("Reset reason: {}", reset_reason);
     // TODO
     /*
-    info!("Reset reason: {reset_reason}");
     info!("Update pending: {update_pending}");
     */
     info!("############################################################");
@@ -246,7 +251,6 @@ async fn main(spawner: Spawner) {
     let display = Display::new(sh_i2c).await.unwrap();
     let display_state = DisplayTaskState::new(display, display_msg_channel.receiver());
 
-    // TODO check these pins
     info!("Setup: ETH");
     let eth: Ethernet<'_, peripherals::ETH, GenericSMI> = Ethernet::new(
         PACKETS.init(PacketQueue::<8, 8>::new()),
@@ -259,7 +263,6 @@ async fn main(spawner: Spawner) {
         p.PC4,  // rx_d0
         p.PC5,  // rx_d1
         p.PG13, // tx_d0
-        //p.PB13, // tx_d1
         p.PG14, // tx_d1
         p.PG11, // tx_en
         GenericSMI::new(0),
