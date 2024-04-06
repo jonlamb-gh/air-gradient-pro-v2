@@ -1,6 +1,9 @@
-use crate::{built_info, config};
-//use bootloader_support::{BootSlot, ResetReason};
-//use update_manager::DeviceInfo;
+use crate::{
+    built_info,
+    common::{BootloaderState, DeviceInfo},
+    config,
+    reset_reason::ResetReason,
+};
 use wire_protocols::{DeviceSerialNumber, ProtocolVersion};
 
 const NA: &str = "NA";
@@ -12,19 +15,19 @@ pub(crate) fn read_device_serial_number() -> DeviceSerialNumber {
     DeviceSerialNumber::new(word0, word1, word2)
 }
 
-// TODO
-/*
-pub(crate) fn device_info(active_boot_slot: BootSlot, reset_reason: ResetReason) -> DeviceInfo {
+pub(crate) fn device_info(
+    bootloader_state: BootloaderState,
+    reset_reason: ResetReason,
+) -> DeviceInfo {
     DeviceInfo {
         protocol_version: ProtocolVersion::v1(),
         firmware_version: config::FIRMWARE_VERSION,
         device_id: config::DEVICE_ID,
         device_serial_number: read_device_serial_number(),
         mac_address: config::MAC_ADDRESS,
-        active_boot_slot,
+        bootloader_state,
         reset_reason,
         built_time_utc: built_info::BUILT_TIME_UTC,
         git_commit: built_info::GIT_COMMIT_HASH.unwrap_or(NA),
     }
 }
-*/

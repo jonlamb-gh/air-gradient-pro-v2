@@ -1,17 +1,13 @@
-use embassy_stm32::{
-    gpio::Output,
-    peripherals::{IWDG, PC13},
-    wdg::IndependentWatchdog,
-};
+use embassy_stm32::{gpio::Output, peripherals::IWDG, wdg::IndependentWatchdog};
 use embassy_time::{Duration, Ticker};
 
 pub struct LedHeartbeatTaskState {
     wdt: IndependentWatchdog<'static, IWDG>,
-    led: Output<'static, PC13>,
+    led: Output<'static>,
 }
 
 impl LedHeartbeatTaskState {
-    pub fn new(wdt: IndependentWatchdog<'static, IWDG>, led: Output<'static, PC13>) -> Self {
+    pub fn new(wdt: IndependentWatchdog<'static, IWDG>, led: Output<'static>) -> Self {
         Self { wdt, led }
     }
 }

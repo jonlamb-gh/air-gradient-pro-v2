@@ -10,4 +10,4 @@ rustflags = [
 ]
 
 [env]
-DEFMT_LOG = "info,air_gradient_pro=debug"
+DEFMT_LOG = "trace"

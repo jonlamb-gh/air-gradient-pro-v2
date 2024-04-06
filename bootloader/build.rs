@@ -1,10 +1,9 @@
-use std::{env, fs::File, io::Write, path::PathBuf};
+use std::env;
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
 
 fn main() {
-    built::write_built_file().expect("Failed to acquire build-time information");
-
-    env_config::generate_env_config_constants();
-
     // Put `memory.x` in our output directory and ensure it's
     // on the linker search path.
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
@@ -22,5 +21,7 @@ fn main() {
 
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
-    println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
+    if env::var("CARGO_FEATURE_DEFMT").is_ok() {
+        println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
+    }
 }

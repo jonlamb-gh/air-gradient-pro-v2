@@ -5,12 +5,14 @@
 use {defmt_rtt as _, panic_probe as _};
 
 use defmt::{debug, error, info};
-use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
+use embassy_boot_stm32::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig};
+use embassy_embedded_hal::{adapter::BlockingAsync, shared_bus::asynch::i2c::I2cDevice};
 use embassy_executor::Spawner;
 use embassy_net::{udp, EthernetAddress, Ipv4Address, Stack, StackResources};
 use embassy_stm32::{
     bind_interrupts, dma,
     eth::{self, generic_smi::GenericSMI, Ethernet, PacketQueue},
+    flash::{Flash, WRITE_SIZE},
     gpio::{Level, Output, Speed},
     i2c::{self, I2c},
     peripherals,
@@ -26,6 +28,7 @@ use embassy_time::Timer;
 use static_cell::StaticCell;
 
 use crate::{
+    common::BootloaderState,
     display::Display,
     drivers::pms5003::DefaultPms5003,
     drivers::s8lp::DefaultS8Lp,
@@ -113,6 +116,16 @@ async fn main(spawner: Spawner) {
     let mut led = Output::new(p.PC13, Level::High, Speed::Low);
     led.set_high();
 
+    info!("Setup: FLASH");
+    Timer::after_millis(10).await;
+    let flash_layout = Flash::new_blocking(p.FLASH).into_blocking_regions();
+    let state_flash = Mutex::new(BlockingAsync::new(flash_layout.bank1_region2));
+    let dfu_flash = Mutex::new(BlockingAsync::new(flash_layout.bank1_region3));
+    let fw_updater_config = FirmwareUpdaterConfig::from_linkerfile(&dfu_flash, &state_flash);
+    let mut magic = AlignedBuffer([0; WRITE_SIZE]);
+    let mut fw_updater = FirmwareUpdater::new(fw_updater_config, &mut magic.0);
+    let bootloader_state = BootloaderState::from(fw_updater.get_state().await.unwrap());
+
     info!("############################################################");
     info!(
         "{} {} ({})",
@@ -143,10 +156,7 @@ async fn main(spawner: Spawner) {
     );
     info!("Device protocol port: {}", config::DEVICE_PORT);
     info!("Reset reason: {}", reset_reason);
-    // TODO
-    /*
-    info!("Update pending: {update_pending}");
-    */
+    info!("Bootloader state: {}", bootloader_state);
     info!("############################################################");
 
     info!(
