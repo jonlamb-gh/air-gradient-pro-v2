@@ -39,7 +39,6 @@ pub async fn display_task(state: DisplayTaskState) -> ! {
     } = state;
 
     let mut sys_info = SystemInfo::new();
-    let mut sys_status = SystemStatus::new();
 
     // TODO constructor can just read this now, doesn't need to be const fn
     debug!("Initializing display state");
@@ -50,8 +49,7 @@ pub async fn display_task(state: DisplayTaskState) -> ! {
     loop {
         match msg_recvr.receive().await {
             Message::SystemStatus(status) => {
-                sys_status = status;
-                display.render_system_status(&sys_status).await.unwrap();
+                display.render_system_status(&status).await.unwrap();
             }
         }
     }

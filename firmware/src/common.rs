@@ -2,9 +2,12 @@ use crate::{
     drivers::{pms5003, s8lp, sgp41, sht31},
     reset_reason::ResetReason,
 };
+use embassy_embedded_hal::{adapter::BlockingAsync, flash::partition::Partition};
+use embassy_stm32::flash::{self, Bank1Region2, Bank1Region3};
 use embassy_sync::{
     blocking_mutex::raw::NoopRawMutex,
     channel::{Channel, Receiver, Sender},
+    mutex::Mutex,
 };
 use wire_protocols::{DeviceId, DeviceSerialNumber, FirmwareVersion, ProtocolVersion};
 
@@ -58,3 +61,20 @@ impl From<embassy_boot_stm32::State> for BootloaderState {
         }
     }
 }
+
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, defmt::Format)]
+pub enum FirmwareUpdateStatus {
+    InProgress,
+    Complete,
+    Verifying,
+    Aborted,
+}
+
+pub type DfuRegion = Mutex<NoopRawMutex, BlockingAsync<Bank1Region3<'static, flash::Blocking>>>;
+pub type StateRegion = Mutex<NoopRawMutex, BlockingAsync<Bank1Region2<'static, flash::Blocking>>>;
+pub type DfuPartition =
+    Partition<'static, NoopRawMutex, BlockingAsync<Bank1Region3<'static, flash::Blocking>>>;
+pub type StatePartition =
+    Partition<'static, NoopRawMutex, BlockingAsync<Bank1Region2<'static, flash::Blocking>>>;
+pub type FirmwareUpdater =
+    embassy_boot_stm32::FirmwareUpdater<'static, DfuPartition, StatePartition>;

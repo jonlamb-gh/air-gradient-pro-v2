@@ -8,7 +8,7 @@ use defmt::{debug, error, info};
 use embassy_boot_stm32::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig};
 use embassy_embedded_hal::{adapter::BlockingAsync, shared_bus::asynch::i2c::I2cDevice};
 use embassy_executor::Spawner;
-use embassy_net::{udp, EthernetAddress, Ipv4Address, Stack, StackResources};
+use embassy_net::{tcp, udp, EthernetAddress, Ipv4Address, Stack, StackResources};
 use embassy_stm32::{
     bind_interrupts, dma,
     eth::{self, generic_smi::GenericSMI, Ethernet, PacketQueue},
@@ -28,7 +28,7 @@ use embassy_time::Timer;
 use static_cell::StaticCell;
 
 use crate::{
-    common::BootloaderState,
+    common::{BootloaderState, DfuRegion, StateRegion},
     display::Display,
     drivers::pms5003::DefaultPms5003,
     drivers::s8lp::DefaultS8Lp,
@@ -43,6 +43,7 @@ use crate::{
     tasks::s8lp::{s8lp_task, S8LpTaskState},
     tasks::sgp41::{sgp41_task, Sgp41TaskState},
     tasks::sht31::{self, sht31_task, Sht31TaskState},
+    tasks::update_manager::{update_manager_task, UpdateManagerTaskState},
 };
 
 mod common;
@@ -56,6 +57,10 @@ mod util;
 pub mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
 }
+
+static FW_UPDATER_MAGIC: StaticCell<AlignedBuffer<{ WRITE_SIZE }>> = StaticCell::new();
+static FW_UPDATER_DFU: StaticCell<DfuRegion> = StaticCell::new();
+static FW_UPDATER_STATE: StaticCell<StateRegion> = StaticCell::new();
 
 static I2C_BUS: StaticCell<
     Mutex<
@@ -71,6 +76,8 @@ static PACKETS: StaticCell<PacketQueue<8, 8>> = StaticCell::new();
 static STACK: StaticCell<Stack<NetDevice>> = StaticCell::new();
 static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
 static UDP_STORAGE: StaticCell<UdpSocketStorage<{ config::BCAST_PROTO_SOCKET_BUFFER_LEN }>> =
+    StaticCell::new();
+static TCP_STORAGE: StaticCell<TcpSocketStorage<{ config::DEVICE_PROTO_SOCKET_BUFFER_LEN }>> =
     StaticCell::new();
 
 bind_interrupts!(struct Irqs {
@@ -119,10 +126,11 @@ async fn main(spawner: Spawner) {
     info!("Setup: FLASH");
     Timer::after_millis(10).await;
     let flash_layout = Flash::new_blocking(p.FLASH).into_blocking_regions();
-    let state_flash = Mutex::new(BlockingAsync::new(flash_layout.bank1_region2));
-    let dfu_flash = Mutex::new(BlockingAsync::new(flash_layout.bank1_region3));
-    let fw_updater_config = FirmwareUpdaterConfig::from_linkerfile(&dfu_flash, &state_flash);
-    let mut magic = AlignedBuffer([0; WRITE_SIZE]);
+    let state_flash =
+        FW_UPDATER_STATE.init(Mutex::new(BlockingAsync::new(flash_layout.bank1_region2)));
+    let dfu_flash = FW_UPDATER_DFU.init(Mutex::new(BlockingAsync::new(flash_layout.bank1_region3)));
+    let fw_updater_config = FirmwareUpdaterConfig::from_linkerfile(dfu_flash, state_flash);
+    let magic = FW_UPDATER_MAGIC.init(AlignedBuffer([0; WRITE_SIZE]));
     let mut fw_updater = FirmwareUpdater::new(fw_updater_config, &mut magic.0);
     let bootloader_state = BootloaderState::from(fw_updater.get_state().await.unwrap());
 
@@ -306,6 +314,13 @@ async fn main(spawner: Spawner) {
         &mut udp_storage.tx_buffer,
     );
 
+    let tcp_storage = TCP_STORAGE.init(TcpSocketStorage::new());
+    let device_socket = tcp::TcpSocket::new(
+        stack,
+        &mut tcp_storage.rx_buffer,
+        &mut tcp_storage.tx_buffer,
+    );
+
     wdt.pet();
     spawner.spawn(net_task(stack)).unwrap();
     // TODO use embassy_futures select with timeout
@@ -319,8 +334,16 @@ async fn main(spawner: Spawner) {
 
     let hb_state = LedHeartbeatTaskState::new(wdt, led);
 
+    let um_state = UpdateManagerTaskState::new(
+        util::device_info(bootloader_state, reset_reason),
+        device_socket,
+        fw_updater,
+        display_msg_channel.sender(),
+    );
+
     spawner.spawn(led_heartbeat_task(hb_state)).unwrap();
     spawner.spawn(data_manager_task(dm_state)).unwrap();
+    spawner.spawn(update_manager_task(um_state)).unwrap();
     spawner.spawn(display_task(display_state)).unwrap();
     spawner.spawn(s8lp_task(s8lp_state)).unwrap();
     spawner.spawn(sht31_task(sht31_state)).unwrap();
@@ -344,6 +367,20 @@ impl<const BL: usize> UdpSocketStorage<BL> {
             rx_metadata: [udp::PacketMetadata::EMPTY; 1],
             tx_buffer: [0; BL],
             tx_metadata: [udp::PacketMetadata::EMPTY; 1],
+        }
+    }
+}
+
+pub struct TcpSocketStorage<const BL: usize> {
+    pub rx_buffer: [u8; BL],
+    pub tx_buffer: [u8; BL],
+}
+
+impl<const BL: usize> TcpSocketStorage<BL> {
+    pub const fn new() -> Self {
+        TcpSocketStorage {
+            rx_buffer: [0; BL],
+            tx_buffer: [0; BL],
         }
     }
 }
