@@ -18,6 +18,7 @@ embassy-embedded-hal = "0.1"
 embassy-futures = "0.1"
 embassy-net = { version = "0.4.0", features = ["defmt", "udp", "tcp", "proto-ipv4", "medium-ethernet" ] }
 embassy-boot-stm32 = { version = "0.2", features = ["defmt"] }
+embassy-boot = { version = "0.2", features = ["defmt"] }
 
 defmt = "0.3"
 defmt-rtt = "0.4"
@@ -75,3 +76,4 @@ embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-futures = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-net = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-boot-stm32 = { git = "https://github.com/embassy-rs/embassy.git" }
+embassy-boot = { git = "https://github.com/embassy-rs/embassy.git" }

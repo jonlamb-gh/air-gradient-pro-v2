@@ -23,7 +23,6 @@ macro_rules! debug {
 
 #[entry]
 fn main() -> ! {
-    //defmt::warn!("GET PERIPH");
     let p = embassy_stm32::init(Default::default());
 
     // Uncomment this if you are debugging the bootloader with debugger/RTT attached,
@@ -50,6 +49,16 @@ fn main() -> ! {
     let bl = BootLoader::prepare::<_, _, _, 1024>(config);
 
     unsafe { bl.load(BANK1_REGION3.base + active_offset) }
+
+    // TODO just for testing without the firmware updater in the mix
+    /*
+    unsafe {
+        let mut p = cortex_m::Peripherals::steal();
+        p.SCB.invalidate_icache();
+        p.SCB.vtor.write(BANK1_REGION3.base);
+        cortex_m::asm::bootload(BANK1_REGION3.base as *const u32)
+    }
+    */
 }
 
 #[no_mangle]

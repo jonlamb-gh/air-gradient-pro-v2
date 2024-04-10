@@ -4,7 +4,7 @@
 // TODO - feature gates
 use {defmt_rtt as _, panic_probe as _};
 
-use defmt::{debug, error, info};
+use defmt::{debug, info};
 use embassy_boot_stm32::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig};
 use embassy_embedded_hal::{adapter::BlockingAsync, shared_bus::asynch::i2c::I2cDevice};
 use embassy_executor::Spawner;
@@ -43,7 +43,7 @@ use crate::{
     tasks::s8lp::{s8lp_task, S8LpTaskState},
     tasks::sgp41::{sgp41_task, Sgp41TaskState},
     tasks::sht31::{self, sht31_task, Sht31TaskState},
-    tasks::update_manager::{update_manager_task, UpdateManagerTaskState},
+    tasks::update_manager::{update_manager_task, UpdateManagerTaskState, CHUNK_BUFFER_SIZE},
 };
 
 mod common;
@@ -61,6 +61,7 @@ pub mod built_info {
 static FW_UPDATER_MAGIC: StaticCell<AlignedBuffer<{ WRITE_SIZE }>> = StaticCell::new();
 static FW_UPDATER_DFU: StaticCell<DfuRegion> = StaticCell::new();
 static FW_UPDATER_STATE: StaticCell<StateRegion> = StaticCell::new();
+static UM_CHUNK_BUFFER: StaticCell<[u8; CHUNK_BUFFER_SIZE]> = StaticCell::new();
 
 static I2C_BUS: StaticCell<
     Mutex<
@@ -138,7 +139,7 @@ async fn main(spawner: Spawner) {
     info!(
         "{} {} ({})",
         crate::built_info::PKG_NAME,
-        config::FIRMWARE_VERSION,
+        defmt::Display2Format(&config::FIRMWARE_VERSION),
         crate::built_info::PROFILE
     );
     info!("Build date: {}", crate::built_info::BUILT_TIME_UTC);
@@ -146,16 +147,19 @@ async fn main(spawner: Spawner) {
     if let Some(gc) = crate::built_info::GIT_COMMIT_HASH {
         info!("Commit: {}", gc);
     }
-    info!("Serial number: {:X}", util::read_device_serial_number());
+    info!(
+        "Serial number: {:X}",
+        defmt::Display2Format(&util::read_device_serial_number())
+    );
     info!(
         "Device ID: 0x{:X} ({})",
-        config::DEVICE_ID,
-        config::DEVICE_ID
+        defmt::Display2Format(&config::DEVICE_ID),
+        defmt::Display2Format(&config::DEVICE_ID),
     );
     info!("IP address: {}", config::IP_CIDR.address());
     info!(
         "MAC address: {}",
-        EthernetAddress::from_bytes(&config::MAC_ADDRESS)
+        defmt::Display2Format(&EthernetAddress::from_bytes(&config::MAC_ADDRESS))
     );
     info!("Broadcast protocol port: {}", config::BROADCAST_PORT);
     info!(
@@ -334,11 +338,13 @@ async fn main(spawner: Spawner) {
 
     let hb_state = LedHeartbeatTaskState::new(wdt, led);
 
+    let chunk_buffer = UM_CHUNK_BUFFER.init([0_u8; CHUNK_BUFFER_SIZE]);
     let um_state = UpdateManagerTaskState::new(
         util::device_info(bootloader_state, reset_reason),
         device_socket,
         fw_updater,
         display_msg_channel.sender(),
+        chunk_buffer,
     );
 
     spawner.spawn(led_heartbeat_task(hb_state)).unwrap();

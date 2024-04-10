@@ -2,6 +2,7 @@ use crate::{
     drivers::{pms5003, s8lp, sgp41, sht31},
     reset_reason::ResetReason,
 };
+use core::fmt;
 use embassy_embedded_hal::{adapter::BlockingAsync, flash::partition::Partition};
 use embassy_stm32::flash::{self, Bank1Region2, Bank1Region3};
 use embassy_sync::{
@@ -51,6 +52,16 @@ pub enum BootloaderState {
     DfuDetach,
 }
 
+impl fmt::Display for BootloaderState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BootloaderState::Boot => f.write_str("boot"),
+            BootloaderState::Swap => f.write_str("swap"),
+            BootloaderState::DfuDetach => f.write_str("dfu-detach"),
+        }
+    }
+}
+
 impl From<embassy_boot_stm32::State> for BootloaderState {
     fn from(value: embassy_boot_stm32::State) -> Self {
         use BootloaderState::*;
@@ -68,6 +79,17 @@ pub enum FirmwareUpdateStatus {
     Complete,
     Verifying,
     Aborted,
+}
+
+impl fmt::Display for FirmwareUpdateStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FirmwareUpdateStatus::InProgress => f.write_str("in-prog"),
+            FirmwareUpdateStatus::Complete => f.write_str("done"),
+            FirmwareUpdateStatus::Verifying => f.write_str("verif"),
+            FirmwareUpdateStatus::Aborted => f.write_str("aborted"),
+        }
+    }
 }
 
 pub type DfuRegion = Mutex<NoopRawMutex, BlockingAsync<Bank1Region3<'static, flash::Blocking>>>;

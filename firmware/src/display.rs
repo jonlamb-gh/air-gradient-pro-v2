@@ -1,4 +1,4 @@
-use crate::config;
+use crate::{common::FirmwareUpdateStatus, config};
 use core::fmt::{self, Write as FmtWrite};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::I2cDeviceError;
@@ -39,7 +39,7 @@ pub enum Error {
     Display(sh1106::Error<I2cDeviceError<i2c::Error>, ()>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, defmt::Format)]
 pub struct SystemInfo {
     pub device_id: DeviceId,
     pub firmware_version: FirmwareVersion,
@@ -107,14 +107,11 @@ impl SystemStatus {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, PartialOrd, Debug)]
+#[derive(Copy, Clone, PartialEq, PartialOrd, Debug, defmt::Format)]
 pub struct FirmwareUpdateInfo {
-    // Slot being written to
-    //pub slot: BootSlot,
+    pub status: FirmwareUpdateStatus,
     pub bytes_written: usize,
-    //pub status: FirmwareUpdateStatus,
-    // TODO protocol needs updated to support this
-    //pub progress_percent: u8,
+    pub progress_percent: u8,
 }
 
 pub type DefaultDisplay = Display<
@@ -334,9 +331,8 @@ where
         )
         .draw(&mut self.drv)?;
 
-        /*
         self.line_buf.clear();
-        write!(&mut self.line_buf, "Slot: {}", view.slot)?;
+        write!(&mut self.line_buf, "KB: {}", view.bytes_written / 1024)?;
         Text::with_baseline(
             self.line_buf.as_str(),
             Point::new(X_C0, Y_R1),
@@ -346,7 +342,7 @@ where
         .draw(&mut self.drv)?;
 
         self.line_buf.clear();
-        write!(&mut self.line_buf, "KB: {}", view.bytes_written / 1024)?;
+        write!(&mut self.line_buf, "Progress: {}%", view.progress_percent)?;
         Text::with_baseline(
             self.line_buf.as_str(),
             Point::new(X_C0, Y_R2),
@@ -356,7 +352,7 @@ where
         .draw(&mut self.drv)?;
 
         self.line_buf.clear();
-        write!(&mut self.line_buf, "Status: {}", view.status,)?;
+        write!(&mut self.line_buf, "Status: {}", view.status)?;
         Text::with_baseline(
             self.line_buf.as_str(),
             Point::new(X_C0, Y_R3),
@@ -364,7 +360,6 @@ where
             Baseline::Top,
         )
         .draw(&mut self.drv)?;
-        */
 
         self.drv.flush().await?;
 

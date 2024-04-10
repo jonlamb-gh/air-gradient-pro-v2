@@ -6,12 +6,12 @@ use byteorder::{ByteOrder, LittleEndian};
 use core::fmt;
 
 pub const DEFAULT_PORT: u16 = 32101;
-pub const SOCKET_BUFFER_LEN: usize = MemoryRegion::MAX_CHUCK_SIZE + 256;
+pub const SOCKET_BUFFER_LEN: usize = FirmwareUpdateHeader::MAX_CHUCK_SIZE + 256;
 
 /// Commands are received by the device.
 /// The device always responds with a `StatusCode`, possibly
 /// followed by a response type.
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, defmt::Format)]
 pub enum Command {
     /// Request device information.
     /// This command also causes the device to reset its connection after sending a response.
@@ -20,27 +20,22 @@ pub enum Command {
     /// Response type: json string
     Info,
 
-    /// Read a region of FLASH memory.
-    /// Request type: MemoryReadRequest
-    /// Response type: [u8]
-    ReadMemory,
-
-    /// Write a region of FLASH memory.
-    /// Request type: MemoryWriteRequest followed by [u8] data
+    /// Write a chunk of new firmware data to the devices DFU region.
+    /// Request type: FirmwareUpdateHeader followed by [u8] data
     /// Response type: None
-    WriteMemory,
-
-    /// Erase a region of FLASH memory.
-    /// Address and length must match one of the boot slots (entire region/all sectors).
-    /// Request type: MemoryEraseRequest
-    /// Response type: None
-    EraseMemory,
+    WriteFirmware,
 
     /// Mark the update as complete and schedule a system reboot.
     /// If there was no update in-progress, then this simply reboots the device.
     /// Request type: None
     /// Response type: None
     CompleteAndReboot,
+
+    /// Mark firmware boot successful and stop rollback on reset.
+    /// If there was no previous update applied, this does nothing.
+    /// Request type: None
+    /// Response type: None
+    ConfirmUpdate,
 
     /// Unknown command.
     /// The device will always response with StatusCode::UnknownCommand.
@@ -70,10 +65,9 @@ impl From<u32> for Command {
         use Command::*;
         match value {
             1 => Info,
-            2 => ReadMemory,
-            3 => WriteMemory,
-            4 => EraseMemory,
-            5 => CompleteAndReboot,
+            2 => WriteFirmware,
+            3 => CompleteAndReboot,
+            4 => ConfirmUpdate,
             _ => Unknown(value),
         }
     }
@@ -84,10 +78,9 @@ impl From<Command> for u32 {
         use Command::*;
         match value {
             Info => 1,
-            ReadMemory => 2,
-            WriteMemory => 3,
-            EraseMemory => 4,
-            CompleteAndReboot => 5,
+            WriteFirmware => 2,
+            CompleteAndReboot => 3,
+            ConfirmUpdate => 4,
             Unknown(v) => v,
         }
     }
@@ -99,21 +92,31 @@ impl fmt::Display for Command {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub struct MemoryRegion {
-    /// Address of the memory region
-    pub address: u32,
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, defmt::Format)]
+pub struct FirmwareUpdateHeader {
+    /// The total size of the new firmware binary, in bytes.
+    /// NOTE: this is pretty wasteful, currently just used to update a progress bar on-device.
+    pub total_size: u32,
 
-    /// Size in bytes of the region
+    // TODO add some hash/verif data (not signature related)
+    /// The starting offset within the firmware area where data writing should begin
+    pub offset: u32,
+
+    /// Size in bytes of the region.
+    /// It must be a multiple of NorFlash WRITE_SIZE.
     pub length: u32,
 }
 
-impl MemoryRegion {
-    pub const WIRE_SIZE: usize = 8;
+impl FirmwareUpdateHeader {
+    pub const WIRE_SIZE: usize = 12;
     pub const MAX_CHUCK_SIZE: usize = 1024;
 
-    pub fn new_unchecked(address: u32, length: u32) -> Self {
-        Self { address, length }
+    pub fn new_unchecked(total_size: u32, offset: u32, length: u32) -> Self {
+        Self {
+            total_size,
+            offset,
+            length,
+        }
     }
 
     pub fn check_length(&self) -> Result<(), StatusCode> {
@@ -128,33 +131,29 @@ impl MemoryRegion {
         }
     }
 
-    pub fn to_le_bytes(self) -> [u8; 8] {
-        let addr = self.address.to_le_bytes();
+    pub fn to_le_bytes(self) -> [u8; Self::WIRE_SIZE] {
+        let size = self.total_size.to_le_bytes();
+        let offset = self.offset.to_le_bytes();
         let len = self.length.to_le_bytes();
         [
-            addr[0], addr[1], addr[2], addr[3], len[0], len[1], len[2], len[3],
+            size[0], size[1], size[2], size[3], offset[0], offset[1], offset[2], offset[3], len[0],
+            len[1], len[2], len[3],
         ]
     }
 }
 
-pub type MemoryReadRequest = MemoryRegion;
-pub type MemoryWriteRequest = MemoryRegion;
-pub type MemoryEraseRequest = MemoryRegion;
-
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+// TODO - redo these
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, defmt::Format)]
 pub enum StatusCode {
     Success,
+    InternalError,
     UnknownCommand,
-    InvalidAddress,
     LengthNotMultiple4,
     LengthTooLong,
     DataLengthIncorrect,
-    EraseError,
-    WriteError,
     FlashError,
-    NetworkError,
-    InternalError,
-    CommandLengthIncorrect,
+    BadState,
+    Signature,
     Unknown(u32),
 }
 
@@ -181,17 +180,14 @@ impl From<u32> for StatusCode {
         use StatusCode::*;
         match value {
             0 => Success,
-            1 => UnknownCommand,
-            2 => InvalidAddress,
+            1 => InternalError,
+            2 => UnknownCommand,
             3 => LengthNotMultiple4,
             4 => LengthTooLong,
             5 => DataLengthIncorrect,
-            6 => EraseError,
-            7 => WriteError,
-            8 => FlashError,
-            9 => NetworkError,
-            10 => InternalError,
-            11 => CommandLengthIncorrect,
+            6 => FlashError,
+            7 => BadState,
+            8 => Signature,
             _ => Unknown(value),
         }
     }
@@ -202,17 +198,14 @@ impl From<StatusCode> for u32 {
         use StatusCode::*;
         match value {
             Success => 0,
-            UnknownCommand => 1,
-            InvalidAddress => 2,
+            InternalError => 1,
+            UnknownCommand => 2,
             LengthNotMultiple4 => 3,
             LengthTooLong => 4,
             DataLengthIncorrect => 5,
-            EraseError => 6,
-            WriteError => 7,
-            FlashError => 8,
-            NetworkError => 9,
-            InternalError => 10,
-            CommandLengthIncorrect => 11,
+            FlashError => 6,
+            BadState => 7,
+            Signature => 8,
             Unknown(v) => v,
         }
     }
@@ -244,5 +237,25 @@ mod tests {
             let c = StatusCode::from_le_bytes(&in_c_bytes).unwrap();
             assert_eq!(in_c, u32::from(c));
         }
+    }
+
+    #[test]
+    fn fw_update_header() {
+        let h = FirmwareUpdateHeader::new_unchecked(
+            0,
+            1024,
+            FirmwareUpdateHeader::MAX_CHUCK_SIZE as u32,
+        );
+        assert!(h.check_length().is_ok());
+
+        let h = FirmwareUpdateHeader::new_unchecked(0, 0, 13);
+        assert_eq!(h.check_length(), Err(StatusCode::LengthNotMultiple4));
+
+        let h = FirmwareUpdateHeader::new_unchecked(
+            0,
+            1024,
+            FirmwareUpdateHeader::MAX_CHUCK_SIZE as u32 + 4,
+        );
+        assert_eq!(h.check_length(), Err(StatusCode::LengthTooLong));
     }
 }

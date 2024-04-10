@@ -6,7 +6,6 @@ use crate::{
 };
 use core::num::NonZeroU16;
 use defmt::{debug, warn};
-use embassy_time::Timer;
 use embassy_time::{Duration, Ticker};
 use gas_index_algorithm::{AlgorithmType, GasIndexAlgorithm};
 use static_assertions::{const_assert, const_assert_eq};
