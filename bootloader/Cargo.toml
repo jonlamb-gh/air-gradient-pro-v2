@@ -5,25 +5,27 @@ edition = "2021"
 build = "build.rs"
 
 [dependencies]
-embassy-stm32 = { version = "0.1", features = ["stm32f407zg"] }
+embassy-stm32 = { version = "0.1", features = ["stm32f407zg", "unstable-pac"] }
 embassy-boot-stm32 = "0.2"
 embassy-sync = "0.5"
 
 cortex-m = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
 cortex-m-rt = "0.7"
+embedded-io = "0.6"
 embedded-storage = "0.3"
 embedded-storage-async = "0.4"
+static_cell = "2"
+log = "0.4"
 
-defmt = { version = "0.3", optional = true }
-defmt-rtt = { version = "0.4", optional = true }
+[build-dependencies.built]
+version = "0.7"
+features = ["git2", "chrono"]
 
 [features]
-defmt = [
-    "dep:defmt",
-    "embassy-boot-stm32/defmt",
-    "embassy-stm32/defmt",
+debug = [
+    "embassy-boot-stm32/log",
+    "embassy-stm32/log",
 ]
-debug = ["dep:defmt-rtt", "defmt"]
 
 [profile.dev]
 debug = 2
@@ -61,6 +63,3 @@ overflow-checks = false
 embassy-stm32 = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-sync = { git = "https://github.com/embassy-rs/embassy.git" }
 embassy-boot-stm32 = { git = "https://github.com/embassy-rs/embassy.git" }
-#embassy-stm32 = { path = "/tmp/embassy/embassy-stm32" }
-#embassy-sync = { path = "/tmp/embassy/embassy-sync" }
-#embassy-boot-stm32 = { path = "/tmp/embassy/embassy-boot-stm32" }

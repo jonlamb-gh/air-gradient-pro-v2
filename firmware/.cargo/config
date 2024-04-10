@@ -2,8 +2,7 @@
 target = "thumbv7em-none-eabihf"
 
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-#runner = "probe-rs run --chip STM32F407ZGTx"
-runner = "probe-rs run --chip STM32F407ZGTx --no-location"
+runner = "probe-rs run --chip STM32F407ZGTx --no-location --restore-unwritten"
 
 [target.thumbv7em-none-eabihf]
 rustflags = [
@@ -11,6 +10,6 @@ rustflags = [
 ]
 
 [env]
-DEFMT_LOG = "info,embassy_boot=trace,embassy_boot_stm32=trace,embassy_stm32::flash=trace,smoltcp=info,air_gradient_pro::tasks::update_manager=trace"
-#DEFMT_LOG = "trace"
-#DEFMT_LOG = "info,air_gradient_pro=debug"
+# Helpful for bootloader/update debugging
+#DEFMT_LOG = "info,embassy_boot=trace,embassy_boot_stm32=trace,embassy_stm32::flash=trace,smoltcp=info,air_gradient_pro::tasks::update_manager=trace"
+DEFMT_LOG = "warn,air_gradient_pro=info"

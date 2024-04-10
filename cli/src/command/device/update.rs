@@ -122,8 +122,6 @@ pub async fn update(cmd: DeviceUpdate, _intr: Interruptor) -> Result<()> {
 
     let _status = device_util::read_status(&mut stream).await?;
 
-    // TODO read status
-
     Ok(())
 }
 

@@ -2,6 +2,6 @@
 
 set -euo pipefail
 
-cargo flash --release --chip STM32F407ZGTx
+cargo flash --release --chip STM32F407ZGTx --restore-unwritten
 
 exit 0

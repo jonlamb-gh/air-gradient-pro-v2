@@ -75,6 +75,9 @@ pub enum Device {
 
     /// Perform a firmware update
     Update(DeviceUpdate),
+
+    /// Confirm a previous firmware update
+    ConfirmUpdate(CommonDeviceOpts),
 }
 
 #[derive(Parser, Debug, Clone)]

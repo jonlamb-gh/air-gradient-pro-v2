@@ -8,7 +8,7 @@ use core::fmt::{self, Write as FmtWrite};
 use defmt::{debug, warn};
 use embassy_boot::FirmwareUpdaterError;
 use embassy_net::tcp::{self, TcpSocket};
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use embedded_io_async::{Read, Write};
 use heapless::String;
 use wire_protocols::device::{Command, FirmwareUpdateHeader, StatusCode};
@@ -30,6 +30,9 @@ enum Error {
     Fmt,
     Connection,
     Protocol,
+    Flash,
+    FirmwareSignature,
+    BadBootloaderState,
 }
 
 type TotalUpdateSizeBytes = usize;
@@ -76,12 +79,7 @@ impl UpdateManagerTaskState {
     }
 
     async fn update(&mut self) -> Result<(), Error> {
-        // TODO
-        // self.manage_reboot_schedule(device, socket);
-
         self.manage_socket().await?;
-
-        // TODO might not do the original manage_in_progress_write stuff
 
         let cmd = self.recv_cmd().await?;
         self.process_cmd(cmd).await?;
@@ -204,31 +202,6 @@ impl UpdateManagerTaskState {
                     .read_exact(&mut self.chunk_buffer[..chunk_size])
                     .await?;
 
-                // TODO testing
-                /*
-                self.send_status(StatusCode::Success).await?;
-                self.bytes_written += chunk_size;
-                self.display_info(FirmwareUpdateStatus::InProgress).await;
-                */
-
-                // TODO try making the bootloader just boot the FLASH region
-                // ie bypass it's logic entirely
-                // just to see if it's related
-                //
-                // NOTE: that appears to make it work....
-                // check for bootloader state overlap with DFU/APP partitions?
-                //
-                // hmm, not seeing the behavior anymore after flashing the bootloader...
-                // yes, I am, just inconsistent
-                //
-                // ....
-                // it could just be the defmt logging that's messed up?
-                // the symbol tables would change...
-                //
-                // try with the same version/elf file and see
-                //
-                // also, watchdog trips in the bootloader when reverting
-
                 match self
                     .fw_updater
                     .write_firmware(hdr.offset as _, &self.chunk_buffer[..chunk_size])
@@ -242,9 +215,11 @@ impl UpdateManagerTaskState {
                         // TODO hash with sha512 and check
                     }
                     Err(e) => {
-                        warn!("Firmware updater returned an error. {}", e);
-                        // TODO send the correct variants
-                        self.send_status(StatusCode::InternalError).await?;
+                        warn!(
+                            "Firmware updater returned an error on write_firmware. {}",
+                            e
+                        );
+                        self.send_status(fw_update_error_to_status_code(&e)).await?;
                         self.reset().await;
                     }
                 }
@@ -254,17 +229,16 @@ impl UpdateManagerTaskState {
                 if self.update_in_progress.is_some() {
                     match self.fw_updater.mark_updated().await {
                         Ok(()) => {
-                            self.update_in_progress = None;
-                            // TODO doesn't show 100% for some reason?
                             self.display_info(FirmwareUpdateStatus::Complete).await;
+                            self.update_in_progress = None;
                             self.send_status(StatusCode::Success).await?;
                         }
                         Err(e) => {
-                            warn!("Firmware updater returned an error. {}", e);
-                            // TODO send the correct variants
-                            self.send_status(StatusCode::InternalError).await?;
+                            warn!("Firmware updater returned an error on mark_updated. {}", e);
+                            self.send_status(fw_update_error_to_status_code(&e)).await?;
                             self.reset().await;
-                            // TODO return Err instead of rebooting
+                            // Don't reboot
+                            return Err(e.into());
                         }
                     }
                 } else {
@@ -273,17 +247,30 @@ impl UpdateManagerTaskState {
                 self.socket.close();
                 self.socket.flush().await?;
                 self.reset().await;
-                Timer::after_secs(2).await;
-
-                // TODO
-                // mark_updated
+                Timer::after_secs(3).await;
 
                 unsafe {
                     sw_reset();
                 }
             }
             Command::ConfirmUpdate => {
-                // TODO
+                if let Ok(embassy_boot_stm32::State::Swap) = self.fw_updater.get_state().await {
+                    match self.fw_updater.mark_booted().await {
+                        Ok(()) => {
+                            self.send_status(StatusCode::Success).await?;
+                            self.device_info.bootloader_state =
+                                self.fw_updater.get_state().await?.into();
+                        }
+                        Err(e) => {
+                            warn!("Firmware updater returned an error on mark_booted. {}", e);
+                            self.send_status(fw_update_error_to_status_code(&e)).await?;
+                            self.reset().await;
+                        }
+                    }
+                } else {
+                    self.send_status(StatusCode::BadState).await?;
+                    self.reset().await;
+                }
             }
             Command::Unknown(_) => {
                 self.send_status(StatusCode::UnknownCommand).await?;
@@ -301,6 +288,14 @@ unsafe fn sw_reset() -> ! {
     cortex_m::peripheral::SCB::sys_reset();
 }
 
+fn fw_update_error_to_status_code(e: &FirmwareUpdaterError) -> StatusCode {
+    match e {
+        FirmwareUpdaterError::Flash(_) => StatusCode::FlashError,
+        FirmwareUpdaterError::Signature(_) => StatusCode::Signature,
+        FirmwareUpdaterError::BadState => StatusCode::BadState,
+    }
+}
+
 impl From<tcp::AcceptError> for Error {
     fn from(value: tcp::AcceptError) -> Self {
         Error::Accept(value)
@@ -316,6 +311,16 @@ impl From<tcp::Error> for Error {
 impl From<fmt::Error> for Error {
     fn from(_value: fmt::Error) -> Self {
         Error::Fmt
+    }
+}
+
+impl From<FirmwareUpdaterError> for Error {
+    fn from(value: FirmwareUpdaterError) -> Self {
+        match value {
+            FirmwareUpdaterError::Flash(_) => Error::Flash,
+            FirmwareUpdaterError::Signature(_) => Error::FirmwareSignature,
+            FirmwareUpdaterError::BadState => Error::BadBootloaderState,
+        }
     }
 }
 
