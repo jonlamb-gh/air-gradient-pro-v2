@@ -25,9 +25,9 @@ pub enum Command {
     /// Response type: None
     WriteFirmware,
 
-    /// Mark the update as complete and schedule a system reboot.
-    /// If there was no update in-progress, then this simply reboots the device.
-    /// Request type: None
+    /// Mark the update as complete and schedule a system reboot if the
+    /// firmware hash matches the provided hash.
+    /// Request type: FirmwareHash (32 bytes)
     /// Response type: None
     CompleteAndReboot,
 
@@ -36,6 +36,11 @@ pub enum Command {
     /// Request type: None
     /// Response type: None
     ConfirmUpdate,
+
+    /// Reboot the device.
+    /// Request type: None
+    /// Response type: None
+    Reboot,
 
     /// Unknown command.
     /// The device will always response with StatusCode::UnknownCommand.
@@ -68,6 +73,7 @@ impl From<u32> for Command {
             2 => WriteFirmware,
             3 => CompleteAndReboot,
             4 => ConfirmUpdate,
+            5 => Reboot,
             _ => Unknown(value),
         }
     }
@@ -81,6 +87,7 @@ impl From<Command> for u32 {
             WriteFirmware => 2,
             CompleteAndReboot => 3,
             ConfirmUpdate => 4,
+            Reboot => 5,
             Unknown(v) => v,
         }
     }
@@ -98,7 +105,6 @@ pub struct FirmwareUpdateHeader {
     /// NOTE: this is pretty wasteful, currently just used to update a progress bar on-device.
     pub total_size: u32,
 
-    // TODO add some hash/verif data (not signature related)
     /// The starting offset within the firmware area where data writing should begin
     pub offset: u32,
 
@@ -142,7 +148,10 @@ impl FirmwareUpdateHeader {
     }
 }
 
-// TODO - redo these
+/// SHA256 hash of the firmware
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, defmt::Format)]
+pub struct FirmwareHash(pub [u8; 32]);
+
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, defmt::Format)]
 pub enum StatusCode {
     Success,
@@ -154,6 +163,7 @@ pub enum StatusCode {
     FlashError,
     BadState,
     Signature,
+    NoUpdatePending,
     Unknown(u32),
 }
 
@@ -188,6 +198,7 @@ impl From<u32> for StatusCode {
             6 => FlashError,
             7 => BadState,
             8 => Signature,
+            9 => NoUpdatePending,
             _ => Unknown(value),
         }
     }
@@ -206,6 +217,7 @@ impl From<StatusCode> for u32 {
             FlashError => 6,
             BadState => 7,
             Signature => 8,
+            NoUpdatePending => 9,
             Unknown(v) => v,
         }
     }

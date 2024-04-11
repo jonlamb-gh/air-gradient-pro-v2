@@ -15,7 +15,7 @@ pub async fn reboot(cmd: CommonDeviceOpts, _intr: Interruptor) -> Result<()> {
     let mut stream = TcpStream::from_std(s)?;
 
     debug!("Requesting device reboot");
-    device_util::write_command(Command::CompleteAndReboot, &mut stream).await?;
+    device_util::write_command(Command::Reboot, &mut stream).await?;
     let status = device_util::read_status(&mut stream).await?;
 
     if cmd.format.is_text() {

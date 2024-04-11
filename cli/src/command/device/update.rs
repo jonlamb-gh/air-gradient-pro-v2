@@ -6,13 +6,14 @@ use crate::{
 };
 use anyhow::{anyhow, bail, Result};
 use elf::{endian::LittleEndian, ElfBytes};
+use sha2::{Digest, Sha256};
 use std::{fs, io::Write, net};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
 };
 use tracing::debug;
-use wire_protocols::device::{Command, FirmwareUpdateHeader};
+use wire_protocols::device::{Command, FirmwareHash, FirmwareUpdateHeader};
 
 pub async fn update(cmd: DeviceUpdate, _intr: Interruptor) -> Result<()> {
     if !cmd.elf_file.exists() {
@@ -79,9 +80,15 @@ pub async fn update(cmd: DeviceUpdate, _intr: Interruptor) -> Result<()> {
         fs::write(bin_path, &bin_data)?;
     }
 
+    let mut hasher = Sha256::new();
+    hasher.update(&bin_data);
+    let bin_hash = hasher.finalize();
+    let fw_hash = FirmwareHash(bin_hash.into());
+
     if cmd.common.format.is_text() {
         println!("Wrting bin to device, {} bytes", bin_data.len());
     }
+
     let mut write_offset = 0_u32;
     let num_chunks = divide_round_up(bin_data.len(), FirmwareUpdateHeader::MAX_CHUCK_SIZE);
     for (chunk_idx, chunk) in bin_data
@@ -115,10 +122,11 @@ pub async fn update(cmd: DeviceUpdate, _intr: Interruptor) -> Result<()> {
     // TODO verify stuff
 
     if cmd.common.format.is_text() {
-        println!("Update complete, issue reboot command");
+        println!("Update complete, issue complete and reboot command");
     }
 
     device_util::write_command(Command::CompleteAndReboot, &mut stream).await?;
+    stream.write_all(&fw_hash.0).await?;
 
     let _status = device_util::read_status(&mut stream).await?;
 
