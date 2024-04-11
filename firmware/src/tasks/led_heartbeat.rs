@@ -1,3 +1,4 @@
+use crate::config;
 use embassy_stm32::{gpio::Output, peripherals::IWDG, wdg::IndependentWatchdog};
 use embassy_time::{Duration, Ticker};
 
@@ -15,7 +16,7 @@ impl LedHeartbeatTaskState {
 #[embassy_executor::task]
 pub async fn led_heartbeat_task(state: LedHeartbeatTaskState) -> ! {
     let LedHeartbeatTaskState { mut wdt, mut led } = state;
-    let mut ticker = Ticker::every(Duration::from_secs(1));
+    let mut ticker = Ticker::every(Duration::from_millis(config::WATCHDOG_TASK_INTERVAL_MS));
 
     led.set_high();
     loop {

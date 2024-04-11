@@ -7,9 +7,9 @@ use crate::{
 use anyhow::{anyhow, bail, Result};
 use elf::{endian::LittleEndian, ElfBytes};
 use sha2::{Digest, Sha256};
-use std::{fs, io::Write, net};
+use std::{fs, net};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
 };
 use tracing::debug;
@@ -118,8 +118,6 @@ pub async fn update(cmd: DeviceUpdate, _intr: Interruptor) -> Result<()> {
 
         write_offset += mem_region_to_write.length;
     }
-
-    // TODO verify stuff
 
     if cmd.common.format.is_text() {
         println!("Update complete, issue complete and reboot command");

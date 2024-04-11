@@ -11,7 +11,7 @@ use embassy_net::tcp::{self, TcpSocket};
 use embassy_time::{with_timeout, Duration, Timer};
 use embedded_io_async::{Read, Write};
 use heapless::String;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use wire_protocols::device::{Command, FirmwareHash, FirmwareUpdateHeader, StatusCode};
 
 #[embassy_executor::task]
