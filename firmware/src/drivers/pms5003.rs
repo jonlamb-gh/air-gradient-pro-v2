@@ -1,12 +1,17 @@
 // NOTE: based on https://github.com/jonlamb-gh/pms-7003,
 // my fork of https://github.com/g-bartoszek/pms-7003
+//
+// NOTE: This impl is a mess.
+// I have two of these sensors, one of them always wakes up in active mode
+// (older one on the PRO board)
+// and the other wakes up in mode it was in before sleeping (newer one on the DIY board)
 
 use core::fmt;
 use defmt::{debug, error, Format};
 use embassy_stm32::{
     dma::NoDma,
     peripherals,
-    usart::{self, Uart},
+    usart::{self, RingBufferedUartRx, Uart, UartTx},
 };
 use embassy_time::Timer;
 use scroll::{Pread, Pwrite, BE};
@@ -22,9 +27,14 @@ type Response = [u8; RESPONSE_FRAME_SIZE];
 const MN1: u8 = 0x42;
 const MN2: u8 = 0x4D;
 const PASSIVE_MODE_RESPONSE: Response = [MN1, MN2, 0x00, 0x04, 0xE1, 0x00, 0x01, 0x74];
+const ACTIVE_MODE_RESPONSE: Response = [MN1, MN2, 0x00, 0x04, 0xE1, 0x01, 0x01, 0x75];
 const SLEEP_RESPONSE: Response = [MN1, MN2, 0x00, 0x04, 0xE4, 0x00, 0x01, 0x77];
 
-// sleep command: https://github.com/esphome/feature-requests/issues/2033
+// sleep:   424DE400000173
+// wake:    424DE400010174
+// active:  424DE100010171
+// passive: 424DE100000170
+// request: 424DE200000171
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Format)]
 pub struct Measurement {
@@ -42,6 +52,8 @@ pub enum Error {
     Serial(usart::Error),
 }
 
+pub const RX_BUFFER_SIZE: usize = 128;
+
 pub type DefaultPms5003 = Pms5003<'static, peripherals::USART2, peripherals::DMA1_CH5>;
 
 pub struct Pms5003<'d, Serial, RxDma>
@@ -50,7 +62,9 @@ where
     RxDma: usart::RxDma<Serial>,
 {
     reader: FrameReader,
-    serial: Uart<'d, Serial, NoDma, RxDma>,
+    tx: UartTx<'d, Serial, NoDma>,
+    rx: RingBufferedUartRx<'d, Serial>,
+    _rx_dma: core::marker::PhantomData<RxDma>,
 }
 
 impl<'d, Serial, RxDma> Pms5003<'d, Serial, RxDma>
@@ -58,26 +72,27 @@ where
     Serial: usart::BasicInstance,
     RxDma: usart::RxDma<Serial>,
 {
-    pub async fn new(serial: Uart<'d, Serial, NoDma, RxDma>) -> Result<Self, Error> {
+    pub async fn new(
+        serial: Uart<'d, Serial, NoDma, RxDma>,
+        rx_buffer: &'static mut [u8; RX_BUFFER_SIZE],
+    ) -> Result<Self, Error> {
+        let (tx, rx) = serial.split();
         let mut drv = Self {
             reader: FrameReader::default(),
-            serial,
+            tx,
+            rx: rx.into_ring_buffered(rx_buffer),
+            _rx_dma: core::marker::PhantomData,
         };
 
-        // Default mode after power up is active mode
-        // Wake up and read to flush the line before
-        // changing modes and sleeping in case
-        // it was just a reboot not power cycle
-        // the pms_7003 lib only works this way currently
-        drv.wake()?;
-        Timer::after_millis(100).await;
-        let _ = drv.reader.read_frame(&mut drv.serial).await?;
-        drv.passive().await?;
+        drv.rx.start()?;
+
+        // Get into a clean state to deal with reboots and power-on states
+        // consistently
+        drv.enter_ready_mode().await?;
 
         debug!("PMS5003: entering standby mode");
         drv.enter_standby_mode().await?;
 
-        // TODO
         Ok(drv)
     }
 
@@ -86,18 +101,22 @@ where
         self.sleep().await
     }
 
-    // NOTE: the sensor wakes up from sleep in active mode
+    // NOTE: I have two of these sensors, one of them always wakes up in active mode
+    // and the other wakes up in mode it was in before sleeping...
+    // To deal with this, always go into active mode after waking,
+    // then enter passive mode
     pub async fn enter_ready_mode(&mut self) -> Result<(), Error> {
         self.wake()?;
-        Timer::after_millis(100).await;
-        let _ = self.reader.read_frame(&mut self.serial).await?;
+        Timer::after_millis(250).await;
+        self.active().await?;
+        Timer::after_millis(250).await;
         self.passive().await?;
         Ok(())
     }
 
     pub async fn measure(&mut self) -> Result<Measurement, Error> {
         self.request()?;
-        let bytes_read = self.reader.read_frame(&mut self.serial).await?;
+        let bytes_read = self.reader.read_frame(&mut self.rx).await?;
 
         if bytes_read != OUTPUT_FRAME_SIZE {
             error!(
@@ -121,7 +140,7 @@ where
 
     async fn sleep(&mut self) -> Result<(), Error> {
         self.send_cmd(&create_command(0xe4, 0))?;
-        self.receive_response(SLEEP_RESPONSE).await
+        self.receive_response(None, &SLEEP_RESPONSE).await
     }
 
     fn wake(&mut self) -> Result<(), Error> {
@@ -130,31 +149,61 @@ where
 
     /// Passive mode - sensor reports air quality on request
     async fn passive(&mut self) -> Result<(), Error> {
-        self.send_cmd(&create_command(0xe1, 0))?;
-        self.receive_response(PASSIVE_MODE_RESPONSE).await
+        let cmd = create_command(0xe1, 0);
+        self.send_cmd(&cmd)?;
+        self.receive_response(Some(&cmd), &PASSIVE_MODE_RESPONSE)
+            .await
+    }
+
+    /// Active mode - sensor reports air quality continuously
+    async fn active(&mut self) -> Result<(), Error> {
+        let cmd = create_command(0xe1, 1);
+        self.send_cmd(&cmd)?;
+        self.receive_response(Some(&cmd), &ACTIVE_MODE_RESPONSE)
+            .await
     }
 
     fn send_cmd(&mut self, cmd: &[u8]) -> Result<(), Error> {
-        self.serial.blocking_write(cmd)?;
-        self.serial.blocking_flush()?;
+        self.tx.blocking_write(cmd)?;
+        self.tx.blocking_flush()?;
         Ok(())
     }
 
-    async fn receive_response(&mut self, expected_response: Response) -> Result<(), Error> {
-        let bytes_read = self.reader.read_frame(&mut self.serial).await?;
+    // NOTE: due to the differing behavior of the sensors I have this attempts
+    // to ignore data frames (max of 4) when expecting command responses
+    // and will rety the command if provided
+    async fn receive_response(
+        &mut self,
+        retry_cmd: Option<&[u8; CMD_FRAME_SIZE]>,
+        expected_response: &Response,
+    ) -> Result<(), Error> {
+        for _ in 0..4 {
+            let bytes_read = self.reader.read_frame(&mut self.rx).await?;
 
-        if bytes_read != RESPONSE_FRAME_SIZE
-            || self.reader.buffer[..RESPONSE_FRAME_SIZE] != expected_response
-        {
-            error!(
-                "PMS5003: bad response, got {} bytes, {:X}",
-                bytes_read,
-                self.reader.buffer[..bytes_read]
-            );
-            Err(Error::Response)
-        } else {
-            Ok(())
+            if bytes_read != RESPONSE_FRAME_SIZE
+                || &self.reader.buffer[..RESPONSE_FRAME_SIZE] != expected_response
+            {
+                error!(
+                    "PMS5003: bad response, expecting {=[u8]:X}, got {} bytes, {=[u8]:X}",
+                    expected_response.as_slice(),
+                    bytes_read,
+                    self.reader.buffer[..bytes_read]
+                );
+
+                if bytes_read == OUTPUT_FRAME_SIZE {
+                    if let Some(cmd) = retry_cmd {
+                        self.send_cmd(cmd)?;
+                    }
+                    // We got a data frame, try again
+                    continue;
+                } else {
+                    break;
+                }
+            } else {
+                return Ok(());
+            }
         }
+        Err(Error::Response)
     }
 }
 
@@ -274,19 +323,13 @@ impl FrameReader {
         self.frame_len = 0;
     }
 
-    fn increment(&mut self, byte: u8) {
-        self.buffer[self.index] = byte;
-        self.index += 1;
-    }
-
     // NOTE: doesn't check the checksum
-    async fn read_frame<'d, Serial, RxDma>(
+    async fn read_frame<'d, Serial>(
         &mut self,
-        serial: &mut Uart<'d, Serial, NoDma, RxDma>,
+        serial: &mut RingBufferedUartRx<'d, Serial>,
     ) -> Result<usize, Error>
     where
         Serial: usart::BasicInstance,
-        RxDma: usart::RxDma<Serial>,
     {
         self.reset();
         loop {
@@ -297,44 +340,41 @@ impl FrameReader {
         }
     }
 
-    async fn update<'d, Serial, RxDma>(
+    async fn update<'d, Serial>(
         &mut self,
-        serial: &mut Uart<'d, Serial, NoDma, RxDma>,
+        serial: &mut RingBufferedUartRx<'d, Serial>,
     ) -> Result<usize, Error>
     where
         Serial: usart::BasicInstance,
-        RxDma: usart::RxDma<Serial>,
     {
         match self.state {
             FrameReaderState::WaitingForFirstMagicNumber => {
-                let byte = nb::block!(serial.nb_read())?;
-                if byte == MN1 {
-                    self.increment(byte);
+                let _ = serial.read(&mut self.buffer[0..1]).await;
+                if self.buffer[0] == MN1 {
+                    self.index += 1;
                     self.state = FrameReaderState::WaitingForSecondMagicNumber;
                 }
             }
             FrameReaderState::WaitingForSecondMagicNumber => {
-                let byte = nb::block!(serial.nb_read())?;
-                if byte == MN2 {
-                    self.increment(byte);
+                let _ = serial.read(&mut self.buffer[1..2]).await;
+                if self.buffer[1] == MN2 {
+                    self.index += 1;
                     self.state = FrameReaderState::WaitingForCrcMsb;
                 }
             }
             FrameReaderState::WaitingForCrcMsb => {
-                let byte = nb::block!(serial.nb_read())?;
-                self.increment(byte);
+                let _ = serial.read(&mut self.buffer[2..3]).await;
+                self.index += 1;
                 self.state = FrameReaderState::WaitingForCrcLsb;
             }
             FrameReaderState::WaitingForCrcLsb => {
-                let byte = nb::block!(serial.nb_read())?;
-                self.increment(byte);
+                let _ = serial.read(&mut self.buffer[3..4]).await;
+                self.index += 1;
                 self.frame_len = u16::from_be_bytes([self.buffer[2], self.buffer[3]]) as usize;
                 self.state = FrameReaderState::Reading;
             }
             FrameReaderState::Reading => {
-                let bytes_read = serial
-                    .read_until_idle(&mut self.buffer[self.index..])
-                    .await?;
+                let bytes_read = serial.read(&mut self.buffer[self.index..]).await?;
 
                 self.index += bytes_read;
 
