@@ -4,16 +4,17 @@
 // NOTE: This impl is a mess.
 // I have two of these sensors, one of them always wakes up in active mode
 // (older one on the PRO board)
-// and the other wakes up in mode it was in before sleeping (newer one on the DIY board)
+// and the other wakes up in mode it was in before sleeping (newer one on the DIY board).
+// They also differ in timing around receiving commands after wakeup.
 
 use core::fmt;
-use defmt::{debug, error, Format};
+use defmt::{debug, error, warn, Format};
 use embassy_stm32::{
     dma::NoDma,
     peripherals,
     usart::{self, RingBufferedUartRx, Uart, UartTx},
 };
-use embassy_time::Timer;
+use embassy_time::{with_timeout, Duration, Timer};
 use scroll::{Pread, Pwrite, BE};
 
 const CMD_FRAME_SIZE: usize = 7;
@@ -44,15 +45,18 @@ pub struct Measurement {
 
 #[derive(Debug)]
 pub enum Error {
-    /// Bad response
+    /// Unexpected response
     Response,
+    /// Protocol error
+    Protocol,
     /// Bad checksum
     Crc,
     /// Serial error
     Serial(usart::Error),
 }
 
-pub const RX_BUFFER_SIZE: usize = 128;
+pub const RX_BUFFER_SIZE: usize = OUTPUT_FRAME_SIZE * 4;
+const RX_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub type DefaultPms5003 = Pms5003<'static, peripherals::USART2, peripherals::DMA1_CH5>;
 
@@ -88,7 +92,30 @@ where
 
         // Get into a clean state to deal with reboots and power-on states
         // consistently
-        drv.enter_ready_mode().await?;
+        drv.wake()?;
+        Timer::after_millis(100).await;
+        drv.active().await?;
+        Timer::after_millis(50).await;
+        drv.passive().await?;
+
+        // Flush out the ring buffer
+        let mut bytes_read = 0;
+        'flush_loop: loop {
+            let res =
+                with_timeout(Duration::from_secs(1), drv.rx.read(&mut drv.reader.buffer)).await;
+            match res {
+                Err(_) => break 'flush_loop, // Timeout
+                Ok(io_res) => {
+                    bytes_read += io_res?;
+                }
+            }
+            if bytes_read >= RX_BUFFER_SIZE {
+                break 'flush_loop;
+            }
+        }
+        if bytes_read != 0 {
+            debug!("PMS5003: drained {} bytes", bytes_read);
+        }
 
         debug!("PMS5003: entering standby mode");
         drv.enter_standby_mode().await?;
@@ -97,19 +124,13 @@ where
     }
 
     pub async fn enter_standby_mode(&mut self) -> Result<(), Error> {
-        Timer::after_millis(100).await;
+        Timer::after_millis(10).await;
         self.sleep().await
     }
 
-    // NOTE: I have two of these sensors, one of them always wakes up in active mode
-    // and the other wakes up in mode it was in before sleeping...
-    // To deal with this, always go into active mode after waking,
-    // then enter passive mode
     pub async fn enter_ready_mode(&mut self) -> Result<(), Error> {
         self.wake()?;
-        Timer::after_millis(250).await;
-        self.active().await?;
-        Timer::after_millis(250).await;
+        Timer::after_millis(100).await;
         self.passive().await?;
         Ok(())
     }
@@ -120,7 +141,7 @@ where
 
         if bytes_read != OUTPUT_FRAME_SIZE {
             error!(
-                "PMS5003: bad response, got {} bytes, {:X}",
+                "PMS5003: bad output frame response, got {} bytes, {=[u8]:X}",
                 bytes_read,
                 self.reader.buffer[..bytes_read]
             );
@@ -140,7 +161,7 @@ where
 
     async fn sleep(&mut self) -> Result<(), Error> {
         self.send_cmd(&create_command(0xe4, 0))?;
-        self.receive_response(None, &SLEEP_RESPONSE).await
+        self.wait_for_response(&SLEEP_RESPONSE).await
     }
 
     fn wake(&mut self) -> Result<(), Error> {
@@ -151,16 +172,14 @@ where
     async fn passive(&mut self) -> Result<(), Error> {
         let cmd = create_command(0xe1, 0);
         self.send_cmd(&cmd)?;
-        self.receive_response(Some(&cmd), &PASSIVE_MODE_RESPONSE)
-            .await
+        self.wait_for_response(&PASSIVE_MODE_RESPONSE).await
     }
 
     /// Active mode - sensor reports air quality continuously
     async fn active(&mut self) -> Result<(), Error> {
         let cmd = create_command(0xe1, 1);
         self.send_cmd(&cmd)?;
-        self.receive_response(Some(&cmd), &ACTIVE_MODE_RESPONSE)
-            .await
+        self.wait_for_response(&ACTIVE_MODE_RESPONSE).await
     }
 
     fn send_cmd(&mut self, cmd: &[u8]) -> Result<(), Error> {
@@ -169,40 +188,48 @@ where
         Ok(())
     }
 
-    // NOTE: due to the differing behavior of the sensors I have this attempts
-    // to ignore data frames (max of 4) when expecting command responses
-    // and will rety the command if provided
-    async fn receive_response(
-        &mut self,
-        retry_cmd: Option<&[u8; CMD_FRAME_SIZE]>,
-        expected_response: &Response,
-    ) -> Result<(), Error> {
-        for _ in 0..4 {
-            let bytes_read = self.reader.read_frame(&mut self.rx).await?;
+    // Loops until expected response is found, stops after
+    // a full RX_BUFFER_SIZE worth of data has been observed
+    async fn wait_for_response(&mut self, expected_response: &Response) -> Result<(), Error> {
+        match with_timeout(
+            RX_RESPONSE_TIMEOUT,
+            self.read_response_retrying(expected_response),
+        )
+        .await
+        {
+            Ok(res) => res,
+            Err(_timeout) => {
+                warn!(
+                    "PMS5003: timeout waiting for response {=[u8]:X}",
+                    expected_response.as_slice()
+                );
+                Err(Error::Response)
+            }
+        }
+    }
 
-            if bytes_read != RESPONSE_FRAME_SIZE
-                || &self.reader.buffer[..RESPONSE_FRAME_SIZE] != expected_response
-            {
-                error!(
+    async fn read_response_retrying(&mut self, expected_response: &Response) -> Result<(), Error> {
+        let mut bytes_read = 0;
+        loop {
+            let frame_size = self.reader.read_frame(&mut self.rx).await?;
+            bytes_read += frame_size;
+
+            if &self.reader.buffer[..bytes_read] == expected_response {
+                return Ok(());
+            } else {
+                warn!(
                     "PMS5003: bad response, expecting {=[u8]:X}, got {} bytes, {=[u8]:X}",
                     expected_response.as_slice(),
                     bytes_read,
                     self.reader.buffer[..bytes_read]
                 );
+            }
 
-                if bytes_read == OUTPUT_FRAME_SIZE {
-                    if let Some(cmd) = retry_cmd {
-                        self.send_cmd(cmd)?;
-                    }
-                    // We got a data frame, try again
-                    continue;
-                } else {
-                    break;
-                }
-            } else {
-                return Ok(());
+            if bytes_read >= RX_BUFFER_SIZE {
+                break;
             }
         }
+
         Err(Error::Response)
     }
 }
@@ -385,7 +412,7 @@ impl FrameReader {
                         self.frame_len + HEADER_SIZE
                     );
                     self.reset();
-                    return Err(Error::Response);
+                    return Err(Error::Protocol);
                 }
 
                 if self.index == self.frame_len + HEADER_SIZE {
