@@ -1,7 +1,7 @@
 // NOTE: based on https://github.com/jonlamb-gh/sgp41, my fork of
 // https://github.com/aectaan/sgp41
 
-use crate::drivers::sht31;
+use crate::drivers::sht40;
 use core::fmt;
 use core::num::NonZeroU16;
 use defmt::Format;
@@ -51,8 +51,8 @@ pub struct Measurement {
     pub nox_ticks: u16,
 }
 
-pub const fn default_compensation() -> sht31::RawMeasurement {
-    sht31::RawMeasurement {
+pub const fn default_compensation() -> sht40::RawMeasurement {
+    sht40::RawMeasurement {
         humidity_ticks: 0x8000,
         temperature_ticks: 0x6666,
     }
@@ -108,7 +108,7 @@ where
 
     pub async fn measure(
         &mut self,
-        compensation: &sht31::RawMeasurement,
+        compensation: &sht40::RawMeasurement,
     ) -> Result<Measurement, Error> {
         let mut buf = [0; 6];
         self.read_cmd_args(

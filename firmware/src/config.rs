@@ -16,7 +16,7 @@ pub const WATCHDOG_TIMEOUT_MS: u32 = 8000;
 pub const WATCHDOG_TASK_INTERVAL_MS: u64 = 1000;
 
 pub const SGP41_MEASUREMENT_INTERVAL_MS: u64 = 1000;
-pub const SHT31_MEASUREMENT_INTERVAL_MS: u64 = 2500;
+pub const SHT40_MEASUREMENT_INTERVAL_MS: u64 = 2500;
 pub const S8LP_MEASUREMENT_INTERVAL_MS: u64 = 5000;
 
 /// PMS sensor is woken up for measurements every 3 minutes

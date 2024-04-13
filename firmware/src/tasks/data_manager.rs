@@ -62,7 +62,7 @@ pub async fn data_manager_task(state: DataManagerTaskState) -> ! {
         // maybe use a ticker for this instead?
         match select(measurement_recvr.receive(), bcast_ticker.next()).await {
             Either::First(measurement) => match measurement {
-                Measurement::Sht31(m) => {
+                Measurement::Sht40(m) => {
                     msg.temperature = m.temperature;
                     msg.humidity = m.humidity;
                     msg.status_flags.set_temperature_valid(true);

@@ -1,5 +1,5 @@
 use crate::{
-    drivers::{pms5003, s8lp, sgp41, sht31},
+    drivers::{pms5003, s8lp, sgp41, sht40},
     reset_reason::ResetReason,
 };
 use core::fmt;
@@ -14,8 +14,8 @@ use wire_protocols::{DeviceId, DeviceSerialNumber, FirmwareVersion, ProtocolVers
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum Measurement {
-    /// Temperature and humidity measurement from the SHT31 sensor
-    Sht31(sht31::Measurement),
+    /// Temperature and humidity measurement from the SHT40 sensor
+    Sht40(sht40::Measurement),
     /// VOC and NOx measurement from the SGP41 sensor
     Sgp41(sgp41::Measurement),
     /// VOC and NOx computed indices

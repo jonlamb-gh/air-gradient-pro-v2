@@ -5,5 +5,5 @@ pub mod net;
 pub mod pms5003;
 pub mod s8lp;
 pub mod sgp41;
-pub mod sht31;
+pub mod sht40;
 pub mod update_manager;

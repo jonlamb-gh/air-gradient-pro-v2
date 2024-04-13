@@ -2,7 +2,7 @@ use crate::{
     common::{Measurement, MeasurementSender},
     config,
     drivers::sgp41::{default_compensation, DefaultSgp41, GasIndices},
-    tasks::sht31::RawMeasurementReceiver,
+    tasks::sht40::RawMeasurementReceiver,
 };
 use core::num::NonZeroU16;
 use defmt::{debug, warn};

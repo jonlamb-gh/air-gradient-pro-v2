@@ -1,7 +1,7 @@
 use crate::{
     common::{Measurement, MeasurementSender},
     config,
-    drivers::sht31::{DefaultSht31, RawMeasurement},
+    drivers::sht40::{DefaultSht40, RawMeasurement},
 };
 use defmt::debug;
 use embassy_sync::{
@@ -17,15 +17,15 @@ pub type RawMeasurementSender =
 pub type RawMeasurementReceiver =
     Receiver<'static, NoopRawMutex, RawMeasurement, MEASUREMENT_CHANNEL_SIZE>;
 
-pub struct Sht31TaskState {
-    driver: DefaultSht31,
+pub struct Sht40TaskState {
+    driver: DefaultSht40,
     measurement_sender: MeasurementSender,
     raw_measurement_sender: RawMeasurementSender,
 }
 
-impl Sht31TaskState {
+impl Sht40TaskState {
     pub fn new(
-        driver: DefaultSht31,
+        driver: DefaultSht40,
         measurement_sender: MeasurementSender,
         raw_measurement_sender: RawMeasurementSender,
     ) -> Self {
@@ -38,13 +38,13 @@ impl Sht31TaskState {
 }
 
 #[embassy_executor::task]
-pub async fn sht31_task(state: Sht31TaskState) -> ! {
-    let Sht31TaskState {
+pub async fn sht40_task(state: Sht40TaskState) -> ! {
+    let Sht40TaskState {
         mut driver,
         measurement_sender,
         raw_measurement_sender,
     } = state;
-    let mut ticker = Ticker::every(Duration::from_millis(config::SHT31_MEASUREMENT_INTERVAL_MS));
+    let mut ticker = Ticker::every(Duration::from_millis(config::SHT40_MEASUREMENT_INTERVAL_MS));
 
     loop {
         let (measurement, raw) = driver.measure().await.unwrap().split();
@@ -55,7 +55,7 @@ pub async fn sht31_task(state: Sht31TaskState) -> ! {
 
         // Send measurement to the data manager
         measurement_sender
-            .send(Measurement::Sht31(measurement))
+            .send(Measurement::Sht40(measurement))
             .await;
 
         ticker.next().await;
