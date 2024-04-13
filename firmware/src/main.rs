@@ -30,10 +30,10 @@ use static_cell::StaticCell;
 use crate::{
     common::{BootloaderState, DfuRegion, StateRegion},
     display::Display,
-    drivers::pms5003::DefaultPms5003,
+    drivers::pms5003::{self, DefaultPms5003},
     drivers::s8lp::DefaultS8Lp,
     drivers::sgp41::DefaultSgp41,
-    drivers::sht31::DefaultSht31,
+    drivers::sht40::DefaultSht40,
     reset_reason::ResetReason,
     tasks::data_manager::{data_manager_task, DataManagerTaskState},
     tasks::display::{display_task, DisplayTaskState, MessageChannel as DisplayMessageChannel},
@@ -42,7 +42,7 @@ use crate::{
     tasks::pms5003::{pms5003_task, Pms5003TaskState},
     tasks::s8lp::{s8lp_task, S8LpTaskState},
     tasks::sgp41::{sgp41_task, Sgp41TaskState},
-    tasks::sht31::{self, sht31_task, Sht31TaskState},
+    tasks::sht40::{self, sht40_task, Sht40TaskState},
     tasks::update_manager::{update_manager_task, UpdateManagerTaskState, CHUNK_BUFFER_SIZE},
 };
 
@@ -63,13 +63,15 @@ static FW_UPDATER_DFU: StaticCell<DfuRegion> = StaticCell::new();
 static FW_UPDATER_STATE: StaticCell<StateRegion> = StaticCell::new();
 static UM_CHUNK_BUFFER: StaticCell<[u8; CHUNK_BUFFER_SIZE]> = StaticCell::new();
 
+static PMS_RX_BUFFER: StaticCell<[u8; pms5003::RX_BUFFER_SIZE]> = StaticCell::new();
+
 static I2C_BUS: StaticCell<
     Mutex<
         NoopRawMutex,
         I2c<'static, peripherals::I2C2, peripherals::DMA1_CH7, peripherals::DMA1_CH2>,
     >,
 > = StaticCell::new();
-static SHT31_RAW_MEASUREMENT_CHANNEL: StaticCell<sht31::RawMeasurementChannel> = StaticCell::new();
+static SHT40_RAW_MEASUREMENT_CHANNEL: StaticCell<sht40::RawMeasurementChannel> = StaticCell::new();
 static DISPLAY_MSG_CHANNEL: StaticCell<DisplayMessageChannel> = StaticCell::new();
 static DM_MEASUREMENT_CHANNEL: StaticCell<common::MeasurementChannel> = StaticCell::new();
 
@@ -185,8 +187,8 @@ async fn main(spawner: Spawner) {
     led.set_low();
 
     // Setup channels
-    let sht31_raw_measurement_channel =
-        SHT31_RAW_MEASUREMENT_CHANNEL.init(sht31::RawMeasurementChannel::new());
+    let sht40_raw_measurement_channel =
+        SHT40_RAW_MEASUREMENT_CHANNEL.init(sht40::RawMeasurementChannel::new());
     let display_msg_channel = DISPLAY_MSG_CHANNEL.init(DisplayMessageChannel::new());
     let dm_measurement_channel = DM_MEASUREMENT_CHANNEL.init(common::MeasurementChannel::new());
 
@@ -209,6 +211,7 @@ async fn main(spawner: Spawner) {
     );
 
     info!("Setup: PMS5003");
+    let rx_buffer = PMS_RX_BUFFER.init([0; pms5003::RX_BUFFER_SIZE]);
     let mut pms_serial_config = usart::Config::default();
     pms_serial_config.baudrate = 9600;
     let pms_serial = Uart::new(
@@ -222,11 +225,11 @@ async fn main(spawner: Spawner) {
     )
     .unwrap();
     let pms_state = Pms5003TaskState::new(
-        DefaultPms5003::new(pms_serial).await.unwrap(),
+        DefaultPms5003::new(pms_serial, rx_buffer).await.unwrap(),
         dm_measurement_channel.sender(),
     );
 
-    // Shared I2C1 bus, data is only shared between tasks on the same executor
+    // Shared I2C2 bus, data is only shared between tasks on the same executor
     info!("Setup: I2C2");
     let i2c = I2c::new(
         p.I2C2,
@@ -238,21 +241,21 @@ async fn main(spawner: Spawner) {
         Hertz(100_000),
         Default::default(),
     );
+
     let i2c_bus = Mutex::new(i2c);
     let i2c_bus = I2C_BUS.init(i2c_bus);
 
-    info!("Setup: SHT31");
-    let sht31_i2c = I2cDevice::new(i2c_bus);
-    let mut sht31 = DefaultSht31::new(sht31_i2c).await.unwrap();
+    info!("Setup: SHT40");
+    let sht40_i2c = I2cDevice::new(i2c_bus);
+    let mut sht40 = DefaultSht40::new(sht40_i2c).await.unwrap();
     debug!(
-        "SHT31: serial number {}",
-        sht31.serial_number().await.unwrap()
+        "SHT40: serial number {}",
+        sht40.serial_number().await.unwrap()
     );
-    debug!("SHT31: status {}", sht31.status().await.unwrap().bits());
-    let sht31_state = Sht31TaskState::new(
-        sht31,
+    let sht40_state = Sht40TaskState::new(
+        sht40,
         dm_measurement_channel.sender(),
-        sht31_raw_measurement_channel.sender(),
+        sht40_raw_measurement_channel.sender(),
     );
 
     info!("Setup: SGP41");
@@ -265,10 +268,10 @@ async fn main(spawner: Spawner) {
     let sgp41_state = Sgp41TaskState::new(
         sgp41,
         dm_measurement_channel.sender(),
-        sht31_raw_measurement_channel.receiver(),
+        sht40_raw_measurement_channel.receiver(),
     );
 
-    info!("Setup: SH1106");
+    info!("Setup: SSD1306");
     let sh_i2c = I2cDevice::new(i2c_bus);
     let display = Display::new(sh_i2c).await.unwrap();
     let display_state = DisplayTaskState::new(display, display_msg_channel.receiver());
@@ -336,8 +339,6 @@ async fn main(spawner: Spawner) {
         bcast_socket,
     );
 
-    let hb_state = LedHeartbeatTaskState::new(wdt, led);
-
     let chunk_buffer = UM_CHUNK_BUFFER.init([0_u8; CHUNK_BUFFER_SIZE]);
     let um_state = UpdateManagerTaskState::new(
         util::device_info(bootloader_state, reset_reason),
@@ -347,12 +348,14 @@ async fn main(spawner: Spawner) {
         chunk_buffer,
     );
 
+    let hb_state = LedHeartbeatTaskState::new(wdt, led);
+
     spawner.spawn(led_heartbeat_task(hb_state)).unwrap();
     spawner.spawn(data_manager_task(dm_state)).unwrap();
     spawner.spawn(update_manager_task(um_state)).unwrap();
     spawner.spawn(display_task(display_state)).unwrap();
     spawner.spawn(s8lp_task(s8lp_state)).unwrap();
-    spawner.spawn(sht31_task(sht31_state)).unwrap();
+    spawner.spawn(sht40_task(sht40_state)).unwrap();
     spawner.spawn(sgp41_task(sgp41_state)).unwrap();
     spawner.spawn(pms5003_task(pms_state)).unwrap();
 
