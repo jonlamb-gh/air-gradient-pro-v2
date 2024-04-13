@@ -8,6 +8,5 @@ hw:
 TODO
 * get renode stuff working
 * update my driver forks to use defmt
-* feature flags for defmt-rtt vs defmt-semihosting (renode)
 * remove unused deps in Cargo.toml, copied from example
 * doc `DEF_LOG`, currently in .cargo/config
