@@ -271,7 +271,7 @@ async fn main(spawner: Spawner) {
         sht40_raw_measurement_channel.receiver(),
     );
 
-    info!("Setup: SSD1306");
+    info!("Setup: SH1106");
     let sh_i2c = I2cDevice::new(i2c_bus);
     let display = Display::new(sh_i2c).await.unwrap();
     let display_state = DisplayTaskState::new(display, display_msg_channel.receiver());

@@ -36,7 +36,6 @@ sensirion-i2c = "0.3"
 scroll = { version = "0.12", default-features = false, features = [] }
 static_assertions = "1"
 gas-index-algorithm = "0.1"
-display-interface = "0.5"
 profont = "0.7"
 heapless = "0.8"
 sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
@@ -52,10 +51,6 @@ features = ["async"]
 #version = "0.5"
 git = "https://github.com/jonlamb-gh/sh1106.git"
 branch = "async-i2c"
-
-[dependencies.ssd1306]
-git = "https://github.com/jonlamb-gh/ssd1306.git"
-branch = "ehal1"
 
 [dependencies.aqi]
 version = "0.2"

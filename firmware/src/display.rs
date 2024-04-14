@@ -13,21 +13,21 @@ use embedded_graphics::{
 };
 use embedded_hal_async::i2c::I2c;
 use heapless::String;
-use ssd1306::{command::AddrMode, mode::BufferedGraphicsMode, prelude::*, Ssd1306};
+use sh1106::{prelude::*, Builder};
 use wire_protocols::{DeviceId, DeviceSerialNumber, FirmwareVersion};
 
-const DH: i32 = 48 / 4;
+const DH: i32 = 64 / 4;
 const Y_R0: i32 = 0;
 const Y_R1: i32 = DH;
 const Y_R2: i32 = 2 * DH;
 const Y_R3: i32 = 3 * DH;
 
-const DW: i32 = 64 / 2;
+const DW: i32 = 128 / 2;
 const X_C0: i32 = 0;
 const X_C1: i32 = DW;
 
-const STATUS_FONT: MonoFont<'_> = profont::PROFONT_7_POINT;
-const INFO_FONT: MonoFont<'_> = profont::PROFONT_7_POINT;
+const STATUS_FONT: MonoFont<'_> = profont::PROFONT_10_POINT;
+const INFO_FONT: MonoFont<'_> = profont::PROFONT_9_POINT;
 const DEVID_FONT: MonoFont<'_> = profont::PROFONT_7_POINT;
 
 const LINE_BUF_CAP: usize = 128 + 2;
@@ -36,7 +36,7 @@ const LINE_BUF_CAP: usize = 128 + 2;
 pub enum Error {
     Infallible,
     Format,
-    Display(display_interface::DisplayError),
+    Display(sh1106::Error<I2cDeviceError<i2c::Error>, ()>),
 }
 
 #[derive(Debug, defmt::Format)]
@@ -72,18 +72,6 @@ pub struct SystemStatus {
 }
 
 impl SystemStatus {
-    pub const fn new() -> Self {
-        Self {
-            pm2_5: None,
-            co2: None,
-            temp: None,
-            humidity: None,
-            voc_index: None,
-            nox_index: None,
-            msg_seqnum: 0,
-        }
-    }
-
     fn aqi(&self) -> Option<u16> {
         self.pm2_5
             .and_then(|concentration| aqi::pm2_5(f64::from(concentration.clamp(0, 500))).ok())
@@ -126,7 +114,7 @@ pub struct Display<I2C>
 where
     I2C: I2c<Error = I2cDeviceError<i2c::Error>>,
 {
-    drv: Ssd1306<I2CInterface<I2C>, DisplaySize64x48, BufferedGraphicsMode<DisplaySize64x48>>,
+    drv: GraphicsMode<I2cInterface<I2C>>,
     line_buf: String<LINE_BUF_CAP>,
 }
 
@@ -135,15 +123,16 @@ where
     I2C: I2c<Error = I2cDeviceError<i2c::Error>>,
 {
     pub async fn new(i2c: I2C) -> Result<Self, Error> {
-        let iface = I2CInterface::new(i2c, 0x3C, 0x40);
-        let mut drv = Ssd1306::new(iface, DisplaySize64x48, DisplayRotation::Rotate0)
-            .into_buffered_graphics_mode();
+        let mut drv: GraphicsMode<_> = Builder::new()
+            .with_i2c_addr(0x3C)
+            .with_size(DisplaySize::Display128x64)
+            .connect_i2c(i2c)
+            .into();
 
-        drv.init_with_addr_mode_async(AddrMode::Horizontal).await?;
-        drv.set_display_on_async(true).await?;
-        drv.set_brightness_async(Brightness::BRIGHTEST).await?;
-        drv.clear_buffer();
-        drv.flush_async().await?;
+        drv.init().await?;
+        drv.set_contrast(0xFF).await?;
+        drv.clear();
+        drv.flush().await?;
 
         Ok(Display {
             drv,
@@ -157,7 +146,7 @@ where
             .text_color(BinaryColor::On)
             .build();
 
-        self.drv.clear_buffer();
+        self.drv.clear();
 
         self.line_buf.clear();
         write!(&mut self.line_buf, "ID: {}", view.device_id)?;
@@ -173,6 +162,16 @@ where
         write!(&mut self.line_buf, "V: {}", view.firmware_version)?;
         Text::with_baseline(
             self.line_buf.as_str(),
+            Point::new(X_C1, Y_R0),
+            text_style,
+            Baseline::Top,
+        )
+        .draw(&mut self.drv)?;
+
+        self.line_buf.clear();
+        write!(&mut self.line_buf, "IP: {}", view.ip)?;
+        Text::with_baseline(
+            self.line_buf.as_str(),
             Point::new(X_C0, Y_R1),
             text_style,
             Baseline::Top,
@@ -180,7 +179,7 @@ where
         .draw(&mut self.drv)?;
 
         self.line_buf.clear();
-        write!(&mut self.line_buf, "{}", view.ip)?;
+        write!(&mut self.line_buf, "M: {}", view.mac)?;
         Text::with_baseline(
             self.line_buf.as_str(),
             Point::new(X_C0, Y_R2),
@@ -189,7 +188,22 @@ where
         )
         .draw(&mut self.drv)?;
 
-        self.drv.flush_async().await?;
+        let text_style = MonoTextStyleBuilder::new()
+            .font(&DEVID_FONT)
+            .text_color(BinaryColor::On)
+            .build();
+
+        self.line_buf.clear();
+        write!(&mut self.line_buf, "{:X}", view.device_serial_number)?;
+        Text::with_baseline(
+            self.line_buf.as_str(),
+            Point::new(X_C0 + 5, Y_R3),
+            text_style,
+            Baseline::Top,
+        )
+        .draw(&mut self.drv)?;
+
+        self.drv.flush().await?;
 
         Ok(())
     }
@@ -200,7 +214,7 @@ where
             .text_color(BinaryColor::On)
             .build();
 
-        self.drv.clear_buffer();
+        self.drv.clear();
 
         let val = view.aqi();
         let val = DisplayOption(&val);
@@ -281,7 +295,7 @@ where
         )
         .draw(&mut self.drv)?;
 
-        self.drv.flush_async().await?;
+        self.drv.flush().await?;
 
         Ok(())
     }
@@ -295,7 +309,7 @@ where
             .text_color(BinaryColor::On)
             .build();
 
-        self.drv.clear_buffer();
+        self.drv.clear();
 
         Text::with_baseline(
             "Updating Firmware",
@@ -335,7 +349,7 @@ where
         )
         .draw(&mut self.drv)?;
 
-        self.drv.flush_async().await?;
+        self.drv.flush().await?;
 
         Ok(())
     }
@@ -362,8 +376,8 @@ impl<'a> fmt::Display for DisplayOption<'a, f32> {
     }
 }
 
-impl From<display_interface::DisplayError> for Error {
-    fn from(value: display_interface::DisplayError) -> Self {
+impl From<sh1106::Error<I2cDeviceError<i2c::Error>, ()>> for Error {
+    fn from(value: sh1106::Error<I2cDeviceError<i2c::Error>, ()>) -> Self {
         Error::Display(value)
     }
 }
