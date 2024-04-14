@@ -8,7 +8,7 @@ use crate::{
 use defmt::{debug, warn};
 use embassy_futures::select::{select, Either};
 use embassy_net::{udp::UdpSocket, Ipv4Address};
-use embassy_time::{Duration, Ticker};
+use embassy_time::{Duration, Instant, Ticker};
 use wire_protocols::{
     broadcast::{Message as WireMessage, Repr as Message, MESSAGE_LEN},
     DateTime, DeviceSerialNumber, ProtocolVersion, StatusFlags,
@@ -107,7 +107,7 @@ pub async fn data_manager_task(state: DataManagerTaskState) -> ! {
                     send_msg = true;
                 }
 
-                msg.uptime_seconds += config::BCAST_INTERVAL_SEC as u32;
+                msg.uptime_seconds = Instant::now().as_secs() as u32;
             }
         }
 
