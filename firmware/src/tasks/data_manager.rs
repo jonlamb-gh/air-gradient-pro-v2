@@ -58,8 +58,6 @@ pub async fn data_manager_task(state: DataManagerTaskState) -> ! {
     loop {
         let mut send_msg = false;
 
-        // TODO timeout gets reset every time we recv a Measurement ??
-        // maybe use a ticker for this instead?
         match select(measurement_recvr.receive(), bcast_ticker.next()).await {
             Either::First(measurement) => match measurement {
                 Measurement::Sht40(m) => {

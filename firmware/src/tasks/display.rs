@@ -1,7 +1,4 @@
-use crate::{
-    display::{DefaultDisplay, FirmwareUpdateInfo, SystemInfo, SystemStatus},
-    util,
-};
+use crate::display::{DefaultDisplay, FirmwareUpdateInfo, SystemInfo, SystemStatus};
 use defmt::debug;
 use embassy_sync::{
     blocking_mutex::raw::NoopRawMutex,
@@ -43,10 +40,8 @@ pub async fn display_task(state: DisplayTaskState) -> ! {
 
     let mut requests_to_ignore_while_updating = 0_usize;
 
-    // TODO constructor can just read this now, doesn't need to be const fn
     debug!("Initializing display state");
-    let mut sys_info = SystemInfo::new();
-    sys_info.device_serial_number = util::read_device_serial_number();
+    let sys_info = SystemInfo::new();
     display.render_system_info(&sys_info).await.unwrap();
 
     loop {
