@@ -26,7 +26,7 @@ pub enum Measurement {
     S8Lp(s8lp::Measurement),
 }
 
-pub const MEASUREMENT_CHANNEL_SIZE: usize = 8;
+pub const MEASUREMENT_CHANNEL_SIZE: usize = 16;
 pub type MeasurementChannel = Channel<NoopRawMutex, Measurement, MEASUREMENT_CHANNEL_SIZE>;
 pub type MeasurementSender = Sender<'static, NoopRawMutex, Measurement, MEASUREMENT_CHANNEL_SIZE>;
 pub type MeasurementReceiver =

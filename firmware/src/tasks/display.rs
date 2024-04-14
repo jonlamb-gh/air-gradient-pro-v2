@@ -14,7 +14,7 @@ pub enum Message {
     FirmwareUpdateInfo(FirmwareUpdateInfo),
 }
 
-pub const MESSAGE_CHANNEL_SIZE: usize = 4;
+pub const MESSAGE_CHANNEL_SIZE: usize = 8;
 pub type MessageChannel = Channel<NoopRawMutex, Message, MESSAGE_CHANNEL_SIZE>;
 pub type MessageSender = Sender<'static, NoopRawMutex, Message, MESSAGE_CHANNEL_SIZE>;
 pub type MessageReceiver = Receiver<'static, NoopRawMutex, Message, MESSAGE_CHANNEL_SIZE>;

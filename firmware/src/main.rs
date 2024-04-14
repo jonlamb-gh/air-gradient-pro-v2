@@ -230,6 +230,7 @@ async fn main(spawner: Spawner) {
     );
 
     // Shared I2C2 bus, data is only shared between tasks on the same executor
+    // NOTE: the SH1106 board has pullups
     info!("Setup: I2C2");
     let i2c = I2c::new(
         p.I2C2,
