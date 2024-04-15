@@ -4,6 +4,7 @@ use embassy_sync::{
     blocking_mutex::raw::NoopRawMutex,
     channel::{Channel, Receiver, Sender},
 };
+use embassy_time::{with_timeout, Duration};
 
 #[derive(Copy, Clone, PartialEq, PartialOrd, Debug, defmt::Format)]
 pub enum Message {
@@ -15,6 +16,11 @@ pub const MESSAGE_CHANNEL_SIZE: usize = 8;
 pub type MessageChannel = Channel<NoopRawMutex, Message, MESSAGE_CHANNEL_SIZE>;
 pub type MessageSender = Sender<'static, NoopRawMutex, Message, MESSAGE_CHANNEL_SIZE>;
 pub type MessageReceiver = Receiver<'static, NoopRawMutex, Message, MESSAGE_CHANNEL_SIZE>;
+
+/// Sometimes the display gets into a weird state if reset during flushing.
+/// TODO - figure out if this is an issue with the fork I'm using or an
+/// actually expected thing.
+const RENDER_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct DisplayTaskState {
     display: DefaultDisplay,
@@ -42,7 +48,12 @@ pub async fn display_task(state: DisplayTaskState) -> ! {
 
     debug!("Initializing display state");
     let sys_info = SystemInfo::new();
-    display.render_system_info(&sys_info).await.unwrap();
+    match with_timeout(RENDER_TIMEOUT, display.render_system_info(&sys_info)).await {
+        Ok(res) => res.unwrap(),
+        Err(_) => {
+            panic!("Display timeout");
+        }
+    }
 
     loop {
         match msg_recvr.receive().await {
@@ -50,7 +61,13 @@ pub async fn display_task(state: DisplayTaskState) -> ! {
                 requests_to_ignore_while_updating =
                     requests_to_ignore_while_updating.saturating_sub(1);
                 if requests_to_ignore_while_updating == 0 {
-                    display.render_system_status(&status).await.unwrap();
+                    match with_timeout(RENDER_TIMEOUT, display.render_system_status(&status)).await
+                    {
+                        Ok(res) => res.unwrap(),
+                        Err(_) => {
+                            panic!("Display timeout");
+                        }
+                    }
                 }
             }
             Message::FirmwareUpdateInfo(info) => {

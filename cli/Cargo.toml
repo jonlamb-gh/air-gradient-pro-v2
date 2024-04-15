@@ -37,3 +37,6 @@ default-features = false
 
 [dependencies.wire-protocols]
 path = "../libraries/wire-protocols"
+
+[profile.release]
+strip="debuginfo"

@@ -1,4 +1,4 @@
-use crate::{common::FirmwareUpdateStatus, config};
+use crate::{common::FirmwareUpdateStatus, config, util};
 use core::fmt::{self, Write as FmtWrite};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::I2cDeviceError;
@@ -49,13 +49,13 @@ pub struct SystemInfo {
 }
 
 impl SystemInfo {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             device_id: config::DEVICE_ID,
             firmware_version: config::FIRMWARE_VERSION,
             ip: config::IP_CIDR.address(),
             mac: EthernetAddress(config::MAC_ADDRESS),
-            device_serial_number: DeviceSerialNumber::zero(),
+            device_serial_number: util::read_device_serial_number(),
         }
     }
 }
