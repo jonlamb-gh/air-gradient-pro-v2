@@ -39,8 +39,9 @@ enum Error {
 type TotalUpdateSizeBytes = usize;
 
 pub const CHUNK_BUFFER_SIZE: usize = FirmwareUpdateHeader::MAX_CHUCK_SIZE;
-// TODO make this static buffer
-const DEVICE_INFO_STRING_SIZE: usize = 512;
+// NOTE: technically the panic info region is 1K, so this should at least include
+// room for the json object key and things, but unlikely to be needed
+pub const DEVICE_INFO_STRING_SIZE: usize = 1024;
 
 const RXTX_TIMEOUT: Duration = Duration::from_secs(4);
 
@@ -50,11 +51,35 @@ pub struct UpdateManagerTaskState {
     fw_updater: FirmwareUpdater,
     display_sender: DisplayMessageSender,
     chunk_buffer: &'static mut [u8],
+    info_string: &'static mut String<DEVICE_INFO_STRING_SIZE>,
 
-    info_string: String<DEVICE_INFO_STRING_SIZE>,
     computed_hash: FirmwareHash,
     update_in_progress: Option<TotalUpdateSizeBytes>,
     bytes_written: usize,
+}
+
+struct MacAddrDisplay<'a>(pub &'a [u8; 6]);
+
+impl<'a> core::fmt::Display for MacAddrDisplay<'a> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+
+macro_rules! write_devinfo {
+    ($um:expr, $fn:literal, $fv:expr) => {{
+        $um.info_string.clear();
+        write!(&mut $um.info_string, concat!("\"", $fn, "\": {},"), $fv)?;
+        $um.socket.write_all($um.info_string.as_bytes()).await?;
+    }};
+}
+
+macro_rules! write_devinfo_str {
+    ($um:expr, $fn:literal, $fv:expr) => {{
+        $um.info_string.clear();
+        write!(&mut $um.info_string, concat!("\"", $fn, "\": \"{}\","), $fv)?;
+        $um.socket.write_all($um.info_string.as_bytes()).await?;
+    }};
 }
 
 impl UpdateManagerTaskState {
@@ -64,6 +89,7 @@ impl UpdateManagerTaskState {
         fw_updater: FirmwareUpdater,
         display_sender: DisplayMessageSender,
         chunk_buffer: &'static mut [u8],
+        info_string: &'static mut String<DEVICE_INFO_STRING_SIZE>,
     ) -> Self {
         assert!(chunk_buffer.len() >= CHUNK_BUFFER_SIZE);
 
@@ -75,7 +101,7 @@ impl UpdateManagerTaskState {
             fw_updater,
             display_sender,
             chunk_buffer,
-            info_string: String::new(),
+            info_string,
             computed_hash: FirmwareHash([0; 32]),
             update_in_progress: None,
             bytes_written: 0,
@@ -151,6 +177,49 @@ impl UpdateManagerTaskState {
         Ok(())
     }
 
+    async fn send_device_info(&mut self) -> Result<(), Error> {
+        self.info_string.clear();
+        write!(&mut self.info_string, "{{")?;
+        self.socket.write_all(self.info_string.as_bytes()).await?;
+
+        write_devinfo_str!(self, "protocol_version", self.device_info.protocol_version);
+        write_devinfo_str!(self, "firmware_version", self.device_info.firmware_version);
+        write_devinfo!(self, "device_id", self.device_info.device_id);
+        write_devinfo_str!(
+            self,
+            "device_serial_number",
+            self.device_info.device_serial_number
+        );
+        write_devinfo!(
+            self,
+            "mac_address",
+            MacAddrDisplay(&self.device_info.mac_address)
+        );
+        write_devinfo_str!(self, "bootloader_state", self.device_info.bootloader_state);
+        write_devinfo_str!(self, "reset_reason", self.device_info.reset_reason);
+        write_devinfo_str!(self, "built_time_utc", self.device_info.built_time_utc);
+        write_devinfo_str!(self, "git_commit", self.device_info.git_commit);
+
+        // For JSON compat, replace '\n' with ' '
+        self.info_string.clear();
+        write!(&mut self.info_string, "\"last_panic_msg\": \"")?;
+        if let Some(msg) = self.device_info.last_panic_msg {
+            for c in msg.chars() {
+                if c.is_control() {
+                    self.info_string.push(' ').map_err(|_| Error::Fmt)?;
+                } else {
+                    self.info_string.push(c).map_err(|_| Error::Fmt)?;
+                }
+            }
+        }
+        writeln!(&mut self.info_string, "\"}}")?;
+        self.socket.write_all(self.info_string.as_bytes()).await?;
+
+        flush_with_timeout(&mut self.socket).await?;
+
+        Ok(())
+    }
+
     async fn recv_cmd(&mut self) -> Result<Command, Error> {
         let mut buf = [0_u8; Command::WIRE_SIZE];
         read_exact_with_timeout(&mut self.socket, &mut buf).await?;
@@ -185,19 +254,7 @@ impl UpdateManagerTaskState {
         match cmd {
             Command::Info => {
                 self.send_status(StatusCode::Success).await?;
-                self.info_string.clear();
-                writeln!(&mut self.info_string, "{{\"protocol_version\": \"{}\", \"firmware_version\": \"{}\", \"device_id\": {}, \"device_serial_number\": \"{:X}\", \"mac_address\": {:?}, \"bootloader_state\": \"{}\", \"reset_reason\": \"{}\", \"built_time_utc\": \"{}\", \"git_commit\": \"{}\"}}",
-                    self.device_info.protocol_version,
-                    self.device_info.firmware_version,
-                    self.device_info.device_id,
-                    self.device_info.device_serial_number,
-                    self.device_info.mac_address,
-                    self.device_info.bootloader_state,
-                    self.device_info.reset_reason,
-                    self.device_info.built_time_utc,
-                    self.device_info.git_commit,
-                )?;
-                self.socket.write_all(self.info_string.as_bytes()).await?;
+                self.send_device_info().await?;
                 self.socket.close();
                 flush_with_timeout(&mut self.socket).await?;
                 self.reset().await;

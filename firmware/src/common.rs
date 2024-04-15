@@ -1,6 +1,8 @@
 use crate::{
+    built_info, config,
     drivers::{pms5003, s8lp, sgp41, sht40},
     reset_reason::ResetReason,
+    util,
 };
 use core::fmt;
 use embassy_embedded_hal::{adapter::BlockingAsync, flash::partition::Partition};
@@ -43,6 +45,28 @@ pub struct DeviceInfo {
     pub reset_reason: ResetReason,
     pub built_time_utc: &'static str,
     pub git_commit: &'static str,
+    pub last_panic_msg: Option<&'static str>,
+}
+
+impl DeviceInfo {
+    pub fn new(
+        bootloader_state: BootloaderState,
+        reset_reason: ResetReason,
+        last_panic_msg: Option<&'static str>,
+    ) -> Self {
+        Self {
+            protocol_version: ProtocolVersion::v1(),
+            firmware_version: config::FIRMWARE_VERSION,
+            device_id: config::DEVICE_ID,
+            device_serial_number: util::read_device_serial_number(),
+            mac_address: config::MAC_ADDRESS,
+            bootloader_state,
+            reset_reason,
+            built_time_utc: built_info::BUILT_TIME_UTC,
+            git_commit: built_info::GIT_COMMIT_HASH.unwrap_or("NA"),
+            last_panic_msg,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, defmt::Format)]

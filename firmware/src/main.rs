@@ -1,10 +1,10 @@
 #![no_std]
 #![no_main]
 
-// TODO - feature gates
-use {defmt_rtt as _, panic_probe as _};
+use {defmt_rtt as _, panic_persist as _};
 
-use defmt::{debug, info};
+use core::panic::PanicInfo;
+use defmt::{debug, error, info};
 use embassy_boot_stm32::{AlignedBuffer, FirmwareUpdater, FirmwareUpdaterConfig};
 use embassy_embedded_hal::{adapter::BlockingAsync, shared_bus::asynch::i2c::I2cDevice};
 use embassy_executor::Spawner;
@@ -25,10 +25,11 @@ use embassy_stm32::{
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
+use heapless::String;
 use static_cell::StaticCell;
 
 use crate::{
-    common::{BootloaderState, DfuRegion, StateRegion},
+    common::{BootloaderState, DeviceInfo, DfuRegion, StateRegion},
     display::Display,
     drivers::pms5003::{self, DefaultPms5003},
     drivers::s8lp::DefaultS8Lp,
@@ -43,7 +44,9 @@ use crate::{
     tasks::s8lp::{s8lp_task, S8LpTaskState},
     tasks::sgp41::{sgp41_task, Sgp41TaskState},
     tasks::sht40::{self, sht40_task, Sht40TaskState},
-    tasks::update_manager::{update_manager_task, UpdateManagerTaskState, CHUNK_BUFFER_SIZE},
+    tasks::update_manager::{
+        update_manager_task, UpdateManagerTaskState, CHUNK_BUFFER_SIZE, DEVICE_INFO_STRING_SIZE,
+    },
 };
 
 mod common;
@@ -61,7 +64,9 @@ pub mod built_info {
 static FW_UPDATER_MAGIC: StaticCell<AlignedBuffer<{ WRITE_SIZE }>> = StaticCell::new();
 static FW_UPDATER_DFU: StaticCell<DfuRegion> = StaticCell::new();
 static FW_UPDATER_STATE: StaticCell<StateRegion> = StaticCell::new();
+
 static UM_CHUNK_BUFFER: StaticCell<[u8; CHUNK_BUFFER_SIZE]> = StaticCell::new();
+static UM_STRING: StaticCell<String<DEVICE_INFO_STRING_SIZE>> = StaticCell::new();
 
 static PMS_RX_BUFFER: StaticCell<[u8; pms5003::RX_BUFFER_SIZE]> = StaticCell::new();
 
@@ -126,6 +131,9 @@ async fn main(spawner: Spawner) {
     let mut led = Output::new(p.PC13, Level::High, Speed::Low);
     led.set_high();
 
+    wdt.pet();
+    let last_panic_msg = panic_persist::get_panic_message_utf8();
+
     info!("Setup: FLASH");
     Timer::after_millis(10).await;
     let flash_layout = Flash::new_blocking(p.FLASH).into_blocking_regions();
@@ -170,6 +178,7 @@ async fn main(spawner: Spawner) {
     );
     info!("Device protocol port: {}", config::DEVICE_PORT);
     info!("Reset reason: {}", reset_reason);
+    info!("Last panic msg: {}", last_panic_msg);
     info!("Bootloader state: {}", bootloader_state);
     info!("############################################################");
 
@@ -340,13 +349,16 @@ async fn main(spawner: Spawner) {
         bcast_socket,
     );
 
+    let string = UM_STRING.init(String::new());
     let chunk_buffer = UM_CHUNK_BUFFER.init([0_u8; CHUNK_BUFFER_SIZE]);
+    let device_info = DeviceInfo::new(bootloader_state, reset_reason, last_panic_msg);
     let um_state = UpdateManagerTaskState::new(
-        util::device_info(bootloader_state, reset_reason),
+        device_info,
         device_socket,
         fw_updater,
         display_msg_channel.sender(),
         chunk_buffer,
+        string,
     );
 
     let hb_state = LedHeartbeatTaskState::new(wdt, led);
@@ -393,4 +405,15 @@ impl<const BL: usize> TcpSocketStorage<BL> {
             tx_buffer: [0; BL],
         }
     }
+}
+
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    cortex_m::interrupt::disable();
+
+    error!("Panic occured!");
+    error!("{}", defmt::Display2Format(info));
+    panic_persist::report_panic_info(info);
+
+    cortex_m::peripheral::SCB::sys_reset();
 }

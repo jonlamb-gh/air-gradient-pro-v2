@@ -20,6 +20,7 @@ pub struct DeviceInfo {
     pub reset_reason: String,
     pub built_time_utc: String,
     pub git_commit: String,
+    pub last_panic_msg: String,
 }
 
 impl DeviceInfo {
@@ -45,6 +46,7 @@ impl DeviceInfo {
             ("reset_reason".to_owned(), self.reset_reason.into()),
             ("built_time_utc".to_owned(), self.built_time_utc.into()),
             ("git_commit".to_owned(), self.git_commit.into()),
+            ("last_panic_msg".to_owned(), self.last_panic_msg.into()),
         ]
         .into_iter()
         .collect()

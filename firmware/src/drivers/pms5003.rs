@@ -214,14 +214,14 @@ where
             let frame_size = self.reader.read_frame(&mut self.rx).await?;
             bytes_read += frame_size;
 
-            if &self.reader.buffer[..bytes_read] == expected_response {
+            if &self.reader.buffer[..frame_size] == expected_response {
                 return Ok(());
             } else {
                 warn!(
                     "PMS5003: bad response, expecting {=[u8]:X}, got {} bytes, {=[u8]:X}",
                     expected_response.as_slice(),
                     bytes_read,
-                    self.reader.buffer[..bytes_read]
+                    self.reader.buffer[..frame_size]
                 );
             }
 
