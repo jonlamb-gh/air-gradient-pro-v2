@@ -3,7 +3,7 @@ use core::fmt::{self, Write as FmtWrite};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::I2cDeviceError;
 use embassy_net::{EthernetAddress, Ipv4Address};
-use embassy_stm32::{i2c, peripherals};
+use embassy_stm32::{i2c, mode, peripherals};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embedded_graphics::{
     mono_font::{MonoFont, MonoTextStyleBuilder},
@@ -102,13 +102,8 @@ pub struct FirmwareUpdateInfo {
     pub progress_percent: u8,
 }
 
-pub type DefaultDisplay = Display<
-    I2cDevice<
-        'static,
-        NoopRawMutex,
-        i2c::I2c<'static, peripherals::I2C2, peripherals::DMA1_CH7, peripherals::DMA1_CH2>,
-    >,
->;
+pub type DefaultDisplay =
+    Display<I2cDevice<'static, NoopRawMutex, i2c::I2c<'static, peripherals::I2C2, mode::Async>>>;
 
 pub struct Display<I2C>
 where

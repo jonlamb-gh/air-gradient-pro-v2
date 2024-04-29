@@ -2,7 +2,7 @@ use core::fmt;
 use defmt::Format;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_embedded_hal::shared_bus::I2cDeviceError;
-use embassy_stm32::{i2c, peripherals};
+use embassy_stm32::{i2c, mode, peripherals};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Delay, Timer};
 use embedded_hal_async::i2c::I2c;
@@ -62,13 +62,8 @@ impl CombinedMeasurement {
     }
 }
 
-pub type DefaultSht40 = Sht40<
-    I2cDevice<
-        'static,
-        NoopRawMutex,
-        i2c::I2c<'static, peripherals::I2C2, peripherals::DMA1_CH7, peripherals::DMA1_CH2>,
-    >,
->;
+pub type DefaultSht40 =
+    Sht40<I2cDevice<'static, NoopRawMutex, i2c::I2c<'static, peripherals::I2C2, mode::Async>>>;
 
 pub struct Sht40<I2C> {
     drv: Sht4x<I2C, Delay>,

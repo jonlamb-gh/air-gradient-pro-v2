@@ -10,12 +10,12 @@ use embassy_embedded_hal::{adapter::BlockingAsync, shared_bus::asynch::i2c::I2cD
 use embassy_executor::Spawner;
 use embassy_net::{tcp, udp, EthernetAddress, Ipv4Address, Stack, StackResources};
 use embassy_stm32::{
-    bind_interrupts, dma,
+    bind_interrupts,
     eth::{self, generic_smi::GenericSMI, Ethernet, PacketQueue},
     flash::{Flash, WRITE_SIZE},
     gpio::{Level, Output, Speed},
     i2c::{self, I2c},
-    peripherals,
+    mode, peripherals,
     rng::{self, Rng},
     time::Hertz,
     usart::{self, Uart},
@@ -70,12 +70,8 @@ static UM_STRING: StaticCell<String<DEVICE_INFO_STRING_SIZE>> = StaticCell::new(
 
 static PMS_RX_BUFFER: StaticCell<[u8; pms5003::RX_BUFFER_SIZE]> = StaticCell::new();
 
-static I2C_BUS: StaticCell<
-    Mutex<
-        NoopRawMutex,
-        I2c<'static, peripherals::I2C2, peripherals::DMA1_CH7, peripherals::DMA1_CH2>,
-    >,
-> = StaticCell::new();
+static I2C_BUS: StaticCell<Mutex<NoopRawMutex, I2c<'static, peripherals::I2C2, mode::Async>>> =
+    StaticCell::new();
 static SHT40_RAW_MEASUREMENT_CHANNEL: StaticCell<sht40::RawMeasurementChannel> = StaticCell::new();
 static DISPLAY_MSG_CHANNEL: StaticCell<DisplayMessageChannel> = StaticCell::new();
 static DM_MEASUREMENT_CHANNEL: StaticCell<common::MeasurementChannel> = StaticCell::new();
@@ -209,7 +205,7 @@ async fn main(spawner: Spawner) {
         p.PD9,
         p.PD8,
         Irqs,
-        dma::NoDma,
+        p.DMA1_CH3,
         p.DMA1_CH1,
         s8lp_serial_config,
     )
@@ -228,7 +224,7 @@ async fn main(spawner: Spawner) {
         p.PD6,
         p.PD5,
         Irqs,
-        dma::NoDma,
+        p.DMA1_CH6,
         p.DMA1_CH5,
         pms_serial_config,
     )

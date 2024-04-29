@@ -1,8 +1,7 @@
 use core::fmt;
 use defmt::{error, Format};
 use embassy_stm32::{
-    dma::NoDma,
-    peripherals,
+    mode, peripherals,
     usart::{self, Uart},
 };
 
@@ -21,23 +20,21 @@ pub enum Error {
 const RESP_SIZE: usize = 7;
 const CMD: &[u8] = &[0xFE, 0x04, 0x00, 0x03, 0x00, 0x01, 0xD5, 0xC5];
 
-pub type DefaultS8Lp = S8Lp<'static, peripherals::USART3, peripherals::DMA1_CH1>;
+pub type DefaultS8Lp = S8Lp<'static, peripherals::USART3>;
 
-pub struct S8Lp<'d, Serial, RxDma>
+pub struct S8Lp<'d, Serial>
 where
     Serial: usart::BasicInstance,
-    RxDma: usart::RxDma<Serial>,
 {
     resp_buffer: [u8; RESP_SIZE],
-    serial: Uart<'d, Serial, NoDma, RxDma>,
+    serial: Uart<'d, Serial, mode::Async>,
 }
 
-impl<'d, Serial, RxDma> S8Lp<'d, Serial, RxDma>
+impl<'d, Serial> S8Lp<'d, Serial>
 where
     Serial: usart::BasicInstance,
-    RxDma: usart::RxDma<Serial>,
 {
-    pub fn new(serial: Uart<'d, Serial, NoDma, RxDma>) -> Self {
+    pub fn new(serial: Uart<'d, Serial, mode::Async>) -> Self {
         Self {
             resp_buffer: [0; 7],
             serial,

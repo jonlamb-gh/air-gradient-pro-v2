@@ -10,8 +10,7 @@
 use core::fmt;
 use defmt::{debug, error, trace, warn, Format};
 use embassy_stm32::{
-    dma::NoDma,
-    peripherals,
+    mode, peripherals,
     usart::{self, RingBufferedUartRx, Uart, UartTx},
 };
 use embassy_time::{with_timeout, Duration, Timer};
@@ -61,26 +60,23 @@ pub const RX_BUFFER_SIZE: usize = OUTPUT_FRAME_SIZE * 8;
 const RX_RESPONSE_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_RETRY_COUNT: usize = 6;
 
-pub type DefaultPms5003 = Pms5003<'static, peripherals::USART2, peripherals::DMA1_CH5>;
+pub type DefaultPms5003 = Pms5003<'static, peripherals::USART2>;
 
-pub struct Pms5003<'d, Serial, RxDma>
+pub struct Pms5003<'d, Serial>
 where
     Serial: usart::BasicInstance,
-    RxDma: usart::RxDma<Serial>,
 {
     reader: FrameReader,
-    tx: UartTx<'d, Serial, NoDma>,
+    tx: UartTx<'d, Serial, mode::Async>,
     rx: RingBufferedUartRx<'d, Serial>,
-    _rx_dma: core::marker::PhantomData<RxDma>,
 }
 
-impl<'d, Serial, RxDma> Pms5003<'d, Serial, RxDma>
+impl<'d, Serial> Pms5003<'d, Serial>
 where
     Serial: usart::BasicInstance,
-    RxDma: usart::RxDma<Serial>,
 {
     pub async fn new(
-        serial: Uart<'d, Serial, NoDma, RxDma>,
+        serial: Uart<'d, Serial, mode::Async>,
         rx_buffer: &'static mut [u8; RX_BUFFER_SIZE],
     ) -> Result<Self, Error> {
         let (tx, rx) = serial.split();
@@ -88,7 +84,6 @@ where
             reader: FrameReader::default(),
             tx,
             rx: rx.into_ring_buffered(rx_buffer),
-            _rx_dma: core::marker::PhantomData,
         };
 
         drv.rx.start()?;
