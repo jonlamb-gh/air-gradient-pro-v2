@@ -121,7 +121,7 @@ async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(config);
 
     let mut wdt = IndependentWatchdog::new(p.IWDG, config::WATCHDOG_TIMEOUT_MS * 1_000);
-    wdt.unleash();
+    //wdt.unleash();
 
     // active-low
     let mut led = Output::new(p.PC13, Level::High, Speed::Low);
@@ -174,8 +174,8 @@ async fn main(spawner: Spawner) {
     );
     info!("Device protocol port: {}", config::DEVICE_PORT);
     info!("Reset reason: {}", reset_reason);
-    info!("Last panic msg: {}", last_panic_msg);
     info!("Bootloader state: {}", bootloader_state);
+    info!("Last panic msg: {}", last_panic_msg);
     info!("############################################################");
 
     info!(
@@ -412,5 +412,9 @@ fn panic(info: &PanicInfo) -> ! {
     error!("{}", defmt::Display2Format(info));
     panic_persist::report_panic_info(info);
 
-    cortex_m::peripheral::SCB::sys_reset();
+    loop {
+        cortex_m::asm::nop();
+    }
+
+    //cortex_m::peripheral::SCB::sys_reset();
 }

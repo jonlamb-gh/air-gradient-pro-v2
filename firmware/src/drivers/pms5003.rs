@@ -57,7 +57,7 @@ pub enum Error {
 }
 
 pub const RX_BUFFER_SIZE: usize = OUTPUT_FRAME_SIZE * 8;
-const RX_RESPONSE_TIMEOUT: Duration = Duration::from_secs(1);
+const RX_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_RETRY_COUNT: usize = 6;
 
 pub type DefaultPms5003 = Pms5003<'static, peripherals::USART2>;
@@ -101,34 +101,43 @@ where
 
     pub async fn enter_standby_mode(&mut self) -> Result<(), Error> {
         Timer::after_millis(100).await;
-        self.sleep().await
+        self.sleep().await?;
+        self.rx.start()?;
+        Ok(())
     }
 
     pub async fn enter_ready_mode(&mut self) -> Result<(), Error> {
         Timer::after_millis(100).await;
         self.wake()?;
         Timer::after_millis(100).await;
+
         let mut cnt = 0;
         loop {
             cnt += 1;
             match self.passive().await {
-                Ok(()) => return Ok(()),
+                Ok(()) => break,
                 Err(e) => match e {
                     Error::Timeout => {
-                        debug!("PMS5003: timeout on passive mode, retrying");
                         if cnt >= MAX_RETRY_COUNT {
                             warn!("PMS5003 exceeded max retry count");
                             return Err(Error::Response);
                         }
+                        debug!("PMS5003: timeout on passive mode, retrying");
                         continue;
                     }
                     _ => return Err(e),
                 },
             }
         }
+
+        // Clears the ring buffer
+        self.rx.start()?;
+
+        Ok(())
     }
 
     pub async fn measure(&mut self) -> Result<Measurement, Error> {
+        trace!("PMS5003 sending request");
         self.request()?;
         let bytes_read = self.reader.read_frame(&mut self.rx).await?;
 
@@ -381,6 +390,9 @@ impl FrameReader {
                 if self.buffer[1] == MN2 {
                     self.index += 1;
                     self.state = FrameReaderState::WaitingForLenMsb;
+                } else {
+                    warn!("PMS5003 invalid second magic, reseting reader");
+                    self.reset();
                 }
             }
             FrameReaderState::WaitingForLenMsb => {
