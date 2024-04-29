@@ -14,4 +14,5 @@ rustflags = [
 #DEFMT_LOG = "info,embassy_boot=trace,embassy_boot_stm32=trace,embassy_stm32::flash=trace,smoltcp=info,air_gradient_pro::tasks::update_manager=trace"
 #DEFMT_LOG = "warn,air_gradient_pro=trace"
 #DEFMT_LOG = "warn,air_gradient_pro=info"
-DEFMT_LOG = "info,air_gradient_pro::drivers::pms5003=trace,air_gradient_pro::tasks::pms5003=trace"
+#DEFMT_LOG = "info,air_gradient_pro::drivers::pms5003=trace,air_gradient_pro::tasks::pms5003=trace"
+DEFMT_LOG = "error,air_gradient_pro=info"

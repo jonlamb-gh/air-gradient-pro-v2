@@ -8,7 +8,7 @@ use embassy_time::{Delay, Timer};
 use embedded_hal_async::i2c::I2c;
 use sht4x::{Precision, Sht4x};
 
-#[derive(Debug)]
+#[derive(Debug, Format)]
 pub enum Error {
     /// Wrong CRC
     Crc,
@@ -18,6 +18,24 @@ pub enum Error {
     I2c(i2c::Error),
     /// Internal error
     Internal,
+}
+
+impl Error {
+    pub fn is_recoverable(&self) -> bool {
+        match self {
+            Error::I2c(e) => matches!(
+                e,
+                i2c::Error::Bus
+                    | i2c::Error::Arbitration
+                    | i2c::Error::Nack
+                    | i2c::Error::Timeout
+                    | i2c::Error::Crc
+                    | i2c::Error::Overrun
+            ),
+            Error::Crc => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Format)]

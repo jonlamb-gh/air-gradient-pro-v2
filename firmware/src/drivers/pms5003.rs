@@ -10,10 +10,11 @@
 use core::fmt;
 use defmt::{debug, error, trace, warn, Format};
 use embassy_stm32::{
-    mode, peripherals,
-    usart::{self, RingBufferedUartRx, Uart, UartTx},
+    peripherals,
+    usart::{self, BufferedUart, BufferedUartRx, BufferedUartTx},
 };
 use embassy_time::{with_timeout, Duration, Timer};
+use embedded_io_async::{BufRead, Read, Write};
 use scroll::{Pread, Pwrite, BE};
 
 const CMD_FRAME_SIZE: usize = 7;
@@ -56,9 +57,12 @@ pub enum Error {
     Serial(usart::Error),
 }
 
-pub const RX_BUFFER_SIZE: usize = OUTPUT_FRAME_SIZE * 8;
+pub const BUFFER_SIZE: usize = RX_BUFFER_SIZE + TX_BUFFER_SIZE;
+const RX_BUFFER_SIZE: usize = OUTPUT_FRAME_SIZE * 6;
+const TX_BUFFER_SIZE: usize = OUTPUT_FRAME_SIZE;
 const RX_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_RETRY_COUNT: usize = 6;
+const RX_DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
 
 pub type DefaultPms5003 = Pms5003<'static, peripherals::USART2>;
 
@@ -67,26 +71,30 @@ where
     Serial: usart::BasicInstance,
 {
     reader: FrameReader,
-    tx: UartTx<'d, Serial, mode::Async>,
-    rx: RingBufferedUartRx<'d, Serial>,
+    tx: BufferedUartTx<'d, Serial>,
+    rx: BufferedUartRx<'d, Serial>,
 }
 
 impl<'d, Serial> Pms5003<'d, Serial>
 where
     Serial: usart::BasicInstance,
 {
-    pub async fn new(
-        serial: Uart<'d, Serial, mode::Async>,
-        rx_buffer: &'static mut [u8; RX_BUFFER_SIZE],
-    ) -> Result<Self, Error> {
+    // Returns (tx, rx) buffers
+    pub fn split_buffer(buffer: &'static mut [u8]) -> (&'static mut [u8], &'static mut [u8]) {
+        assert_eq!(buffer.len(), BUFFER_SIZE);
+        let (rx, tx) = buffer.split_at_mut(RX_BUFFER_SIZE);
+        assert_eq!(tx.len(), TX_BUFFER_SIZE);
+        assert_eq!(rx.len(), RX_BUFFER_SIZE);
+        (tx, rx)
+    }
+
+    pub async fn new(serial: BufferedUart<'d, Serial>) -> Result<Self, Error> {
         let (tx, rx) = serial.split();
         let mut drv = Self {
             reader: FrameReader::default(),
             tx,
-            rx: rx.into_ring_buffered(rx_buffer),
+            rx,
         };
-
-        drv.rx.start()?;
 
         // Get into a clean state to deal with reboots and power-on states
         // consistently
@@ -102,13 +110,13 @@ where
     pub async fn enter_standby_mode(&mut self) -> Result<(), Error> {
         Timer::after_millis(100).await;
         self.sleep().await?;
-        self.rx.start()?;
+        self.drain_pending_rx().await;
         Ok(())
     }
 
     pub async fn enter_ready_mode(&mut self) -> Result<(), Error> {
         Timer::after_millis(100).await;
-        self.wake()?;
+        self.wake().await?;
         Timer::after_millis(100).await;
 
         let mut cnt = 0;
@@ -122,7 +130,7 @@ where
                             warn!("PMS5003 exceeded max retry count");
                             return Err(Error::Response);
                         }
-                        debug!("PMS5003: timeout on passive mode, retrying");
+                        debug!("PMS5003 timeout on passive mode, retrying");
                         continue;
                     }
                     _ => return Err(e),
@@ -130,20 +138,19 @@ where
             }
         }
 
-        // Clears the ring buffer
-        self.rx.start()?;
+        self.drain_pending_rx().await;
 
         Ok(())
     }
 
     pub async fn measure(&mut self) -> Result<Measurement, Error> {
         trace!("PMS5003 sending request");
-        self.request()?;
+        self.request().await?;
         let bytes_read = self.reader.read_frame(&mut self.rx).await?;
 
         if bytes_read != OUTPUT_FRAME_SIZE {
             error!(
-                "PMS5003: bad output frame response, got {} bytes, {=[u8]:X}",
+                "PMS5003 bad output frame response, got {} bytes, {=[u8]:X}",
                 bytes_read,
                 self.reader.buffer[..bytes_read]
             );
@@ -156,24 +163,38 @@ where
         }
     }
 
+    async fn drain_pending_rx(&mut self) {
+        match with_timeout(RX_DRAIN_TIMEOUT, self.rx.fill_buf()).await {
+            Ok(res) => {
+                if let Ok(buf) = res {
+                    let len = buf.len();
+                    let _ = buf;
+                    debug!("PMS5003 drained {}", len);
+                    self.rx.consume(len);
+                }
+            }
+            Err(_timeout) => (),
+        }
+    }
+
     /// Requests status in passive mode
-    fn request(&mut self) -> Result<(), Error> {
-        self.send_cmd(&create_command(0xe2, 0))
+    async fn request(&mut self) -> Result<(), Error> {
+        self.send_cmd(&create_command(0xe2, 0)).await
     }
 
     async fn sleep(&mut self) -> Result<(), Error> {
-        self.send_cmd(&create_command(0xe4, 0))?;
+        self.send_cmd(&create_command(0xe4, 0)).await?;
         self.wait_for_response(&SLEEP_RESPONSE).await
     }
 
-    fn wake(&mut self) -> Result<(), Error> {
-        self.send_cmd(&create_command(0xe4, 1))
+    async fn wake(&mut self) -> Result<(), Error> {
+        self.send_cmd(&create_command(0xe4, 1)).await
     }
 
     /// Passive mode - sensor reports air quality on request
     async fn passive(&mut self) -> Result<(), Error> {
         let cmd = create_command(0xe1, 0);
-        self.send_cmd(&cmd)?;
+        self.send_cmd(&cmd).await?;
         self.wait_for_response(&PASSIVE_MODE_RESPONSE).await
     }
 
@@ -181,13 +202,13 @@ where
     #[allow(unused)]
     async fn active(&mut self) -> Result<(), Error> {
         let cmd = create_command(0xe1, 1);
-        self.send_cmd(&cmd)?;
+        self.send_cmd(&cmd).await?;
         self.wait_for_response(&ACTIVE_MODE_RESPONSE).await
     }
 
-    fn send_cmd(&mut self, cmd: &[u8]) -> Result<(), Error> {
-        self.tx.blocking_write(cmd)?;
-        self.tx.blocking_flush()?;
+    async fn send_cmd(&mut self, cmd: &[u8]) -> Result<(), Error> {
+        self.tx.write_all(cmd).await?;
+        self.tx.flush().await?;
         Ok(())
     }
 
@@ -356,7 +377,7 @@ impl FrameReader {
     // NOTE: doesn't check the checksum
     async fn read_frame<'d, Serial>(
         &mut self,
-        serial: &mut RingBufferedUartRx<'d, Serial>,
+        serial: &mut BufferedUartRx<'d, Serial>,
     ) -> Result<usize, Error>
     where
         Serial: usart::BasicInstance,
@@ -372,7 +393,7 @@ impl FrameReader {
 
     async fn update<'d, Serial>(
         &mut self,
-        serial: &mut RingBufferedUartRx<'d, Serial>,
+        serial: &mut BufferedUartRx<'d, Serial>,
     ) -> Result<usize, Error>
     where
         Serial: usart::BasicInstance,

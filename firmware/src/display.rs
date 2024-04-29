@@ -39,6 +39,26 @@ pub enum Error {
     Display(sh1106::Error<I2cDeviceError<i2c::Error>, ()>),
 }
 
+impl Error {
+    pub fn is_recoverable(&self) -> bool {
+        match self {
+            Error::Display(sh1106::Error::Comm(e)) => match e {
+                I2cDeviceError::I2c(e) => matches!(
+                    e,
+                    i2c::Error::Bus
+                        | i2c::Error::Arbitration
+                        | i2c::Error::Nack
+                        | i2c::Error::Timeout
+                        | i2c::Error::Crc
+                        | i2c::Error::Overrun
+                ),
+                I2cDeviceError::Config => false,
+            },
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, defmt::Format)]
 pub struct SystemInfo {
     pub device_id: DeviceId,

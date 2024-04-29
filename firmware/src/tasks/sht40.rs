@@ -3,7 +3,7 @@ use crate::{
     config,
     drivers::sht40::{DefaultSht40, RawMeasurement},
 };
-use defmt::debug;
+use defmt::{debug, warn};
 use embassy_sync::{
     blocking_mutex::raw::NoopRawMutex,
     channel::{Channel, Receiver, Sender},
@@ -47,16 +47,27 @@ pub async fn sht40_task(state: Sht40TaskState) -> ! {
     let mut ticker = Ticker::every(Duration::from_millis(config::SHT40_MEASUREMENT_INTERVAL_MS));
 
     loop {
-        let (measurement, raw) = driver.measure().await.unwrap().split();
-        debug!("{}", measurement);
+        let res = driver.measure().await;
+        match res {
+            Ok(m) => {
+                let (measurement, raw) = m.split();
+                debug!("{}", measurement);
 
-        // Send raw measurement to the SGP41 for conditioning data
-        raw_measurement_sender.send(raw).await;
+                // Send raw measurement to the SGP41 for conditioning data
+                raw_measurement_sender.send(raw).await;
 
-        // Send measurement to the data manager
-        measurement_sender
-            .send(Measurement::Sht40(measurement))
-            .await;
+                // Send measurement to the data manager
+                measurement_sender
+                    .send(Measurement::Sht40(measurement))
+                    .await;
+            }
+            Err(e) => {
+                warn!("SHT40 driver returned an error {}", e);
+                if !e.is_recoverable() {
+                    panic!("SHT40 measurement error. {:?}", e);
+                }
+            }
+        }
 
         ticker.next().await;
     }

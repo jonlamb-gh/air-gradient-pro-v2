@@ -1,5 +1,5 @@
-use crate::display::{DefaultDisplay, FirmwareUpdateInfo, SystemInfo, SystemStatus};
-use defmt::debug;
+use crate::display::{DefaultDisplay, Error, FirmwareUpdateInfo, SystemInfo, SystemStatus};
+use defmt::{debug, warn};
 use embassy_sync::{
     blocking_mutex::raw::NoopRawMutex,
     channel::{Channel, Receiver, Sender},
@@ -64,7 +64,7 @@ pub async fn display_task(state: DisplayTaskState) -> ! {
                 if requests_to_ignore_while_updating == 0 {
                     match with_timeout(RENDER_TIMEOUT, display.render_system_status(&status)).await
                     {
-                        Ok(res) => res.unwrap(),
+                        Ok(res) => handle_result(res),
                         Err(_) => {
                             panic!("Display timeout");
                         }
@@ -73,7 +73,22 @@ pub async fn display_task(state: DisplayTaskState) -> ! {
             }
             Message::FirmwareUpdateInfo(info) => {
                 requests_to_ignore_while_updating = DEFAULT_IGNORE;
-                display.render_firmware_update_info(&info).await.unwrap();
+                handle_result(display.render_firmware_update_info(&info).await);
+            }
+        }
+    }
+}
+
+fn handle_result(res: Result<(), Error>) {
+    match res {
+        Ok(()) => (),
+        Err(e) => {
+            warn!(
+                "Display driver returned an error {}",
+                defmt::Debug2Format(&e)
+            );
+            if !e.is_recoverable() {
+                panic!("Display error. {:?}", e);
             }
         }
     }

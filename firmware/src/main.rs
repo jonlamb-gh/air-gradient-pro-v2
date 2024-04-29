@@ -18,7 +18,7 @@ use embassy_stm32::{
     mode, peripherals,
     rng::{self, Rng},
     time::Hertz,
-    usart::{self, Uart},
+    usart::{self, BufferedUart, Uart},
     wdg::IndependentWatchdog,
     Config,
 };
@@ -68,7 +68,7 @@ static FW_UPDATER_STATE: StaticCell<StateRegion> = StaticCell::new();
 static UM_CHUNK_BUFFER: StaticCell<[u8; CHUNK_BUFFER_SIZE]> = StaticCell::new();
 static UM_STRING: StaticCell<String<DEVICE_INFO_STRING_SIZE>> = StaticCell::new();
 
-static PMS_RX_BUFFER: StaticCell<[u8; pms5003::RX_BUFFER_SIZE]> = StaticCell::new();
+static PMS_BUFFER: StaticCell<[u8; pms5003::BUFFER_SIZE]> = StaticCell::new();
 
 static I2C_BUS: StaticCell<Mutex<NoopRawMutex, I2c<'static, peripherals::I2C2, mode::Async>>> =
     StaticCell::new();
@@ -85,7 +85,7 @@ static TCP_STORAGE: StaticCell<TcpSocketStorage<{ config::DEVICE_PROTO_SOCKET_BU
     StaticCell::new();
 
 bind_interrupts!(struct Irqs {
-    USART2 => usart::InterruptHandler<peripherals::USART2>;
+    USART2 => usart::BufferedInterruptHandler<peripherals::USART2>;
     USART3 => usart::InterruptHandler<peripherals::USART3>;
     I2C2_EV => i2c::EventInterruptHandler<peripherals::I2C2>;
     I2C2_ER => i2c::ErrorInterruptHandler<peripherals::I2C2>;
@@ -121,7 +121,7 @@ async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(config);
 
     let mut wdt = IndependentWatchdog::new(p.IWDG, config::WATCHDOG_TIMEOUT_MS * 1_000);
-    //wdt.unleash();
+    wdt.unleash();
 
     // active-low
     let mut led = Output::new(p.PC13, Level::High, Speed::Low);
@@ -216,21 +216,22 @@ async fn main(spawner: Spawner) {
     );
 
     info!("Setup: PMS5003");
-    let rx_buffer = PMS_RX_BUFFER.init([0; pms5003::RX_BUFFER_SIZE]);
+    let pms_buffer = PMS_BUFFER.init([0; pms5003::BUFFER_SIZE]);
+    let (tx_buf, rx_buf) = DefaultPms5003::split_buffer(pms_buffer);
     let mut pms_serial_config = usart::Config::default();
     pms_serial_config.baudrate = 9600;
-    let pms_serial = Uart::new(
+    let pms_serial = BufferedUart::new(
         p.USART2,
+        Irqs,
         p.PD6,
         p.PD5,
-        Irqs,
-        p.DMA1_CH6,
-        p.DMA1_CH5,
+        tx_buf,
+        rx_buf,
         pms_serial_config,
     )
     .unwrap();
     let pms_state = Pms5003TaskState::new(
-        DefaultPms5003::new(pms_serial, rx_buffer).await.unwrap(),
+        DefaultPms5003::new(pms_serial).await.unwrap(),
         dm_measurement_channel.sender(),
     );
     wdt.pet();
@@ -412,9 +413,5 @@ fn panic(info: &PanicInfo) -> ! {
     error!("{}", defmt::Display2Format(info));
     panic_persist::report_panic_info(info);
 
-    loop {
-        cortex_m::asm::nop();
-    }
-
-    //cortex_m::peripheral::SCB::sys_reset();
+    cortex_m::peripheral::SCB::sys_reset();
 }

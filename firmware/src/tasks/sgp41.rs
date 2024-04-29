@@ -92,24 +92,34 @@ pub async fn sgp41_task(state: Sgp41TaskState) -> ! {
                     &default_compensation_data
                 };
 
-                let measurement = driver.measure(comp_data).await.unwrap();
-                debug!("{}", measurement);
+                let res = driver.measure(comp_data).await;
+                match res {
+                    Ok(measurement) => {
+                        debug!("{}", measurement);
 
-                let gas_indices = GasIndices {
-                    voc_index: NonZeroU16::new(
-                        voc_algorithm.process(measurement.voc_ticks as _) as u16
-                    ),
-                    nox_index: NonZeroU16::new(
-                        nox_algorithm.process(measurement.nox_ticks as _) as u16
-                    ),
-                };
+                        let gas_indices = GasIndices {
+                            voc_index: NonZeroU16::new(
+                                voc_algorithm.process(measurement.voc_ticks as _) as u16,
+                            ),
+                            nox_index: NonZeroU16::new(
+                                nox_algorithm.process(measurement.nox_ticks as _) as u16,
+                            ),
+                        };
 
-                measurement_sender
-                    .send(Measurement::Sgp41(measurement))
-                    .await;
-                measurement_sender
-                    .send(Measurement::GasIndices(gas_indices))
-                    .await;
+                        measurement_sender
+                            .send(Measurement::Sgp41(measurement))
+                            .await;
+                        measurement_sender
+                            .send(Measurement::GasIndices(gas_indices))
+                            .await;
+                    }
+                    Err(e) => {
+                        warn!("SGP41 driver returned an error {}", e);
+                        if !e.is_recoverable() {
+                            panic!("SGP41 measurement error. {:?}", e);
+                        }
+                    }
+                }
             }
         }
 

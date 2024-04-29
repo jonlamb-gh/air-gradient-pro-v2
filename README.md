@@ -11,3 +11,10 @@ TODO
 * remove unused deps in Cargo.toml, copied from example
 * doc `DEF_LOG`, currently in .cargo/config
 * fix the display async driver, occasional I2C NACK errors and timeouts
+* error recovery
+
+```
+838.011230 ERROR Panic occured!
+838.011260 ERROR panicked at src/tasks/sht40.rs:50:57:
+called `Result::unwrap()` on an `Err` value: I2c(Nack)
+```
