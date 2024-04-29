@@ -13,3 +13,4 @@ rustflags = [
 # Helpful for bootloader/update debugging
 #DEFMT_LOG = "info,embassy_boot=trace,embassy_boot_stm32=trace,embassy_stm32::flash=trace,smoltcp=info,air_gradient_pro::tasks::update_manager=trace"
 DEFMT_LOG = "warn,air_gradient_pro=trace"
+#DEFMT_LOG = "warn,air_gradient_pro=info"

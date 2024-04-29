@@ -83,7 +83,7 @@ where
             drv: Sht4x::new(i2c),
         };
         drv.drv.soft_reset(&mut Delay).await?;
-        Timer::after_millis(20).await;
+        Timer::after_millis(100).await;
         Ok(drv)
     }
 

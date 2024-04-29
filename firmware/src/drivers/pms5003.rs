@@ -8,7 +8,7 @@
 // They also differ in timing around receiving commands after wakeup.
 
 use core::fmt;
-use defmt::{debug, error, warn, Format};
+use defmt::{debug, error, trace, warn, Format};
 use embassy_stm32::{
     dma::NoDma,
     peripherals,
@@ -45,6 +45,8 @@ pub struct Measurement {
 
 #[derive(Debug)]
 pub enum Error {
+    /// Timeout waiting for response
+    Timeout,
     /// Unexpected response
     Response,
     /// Protocol error
@@ -55,8 +57,9 @@ pub enum Error {
     Serial(usart::Error),
 }
 
-pub const RX_BUFFER_SIZE: usize = OUTPUT_FRAME_SIZE * 4;
-const RX_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+pub const RX_BUFFER_SIZE: usize = OUTPUT_FRAME_SIZE * 8;
+const RX_RESPONSE_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_RETRY_COUNT: usize = 6;
 
 pub type DefaultPms5003 = Pms5003<'static, peripherals::USART2, peripherals::DMA1_CH5>;
 
@@ -92,47 +95,42 @@ where
 
         // Get into a clean state to deal with reboots and power-on states
         // consistently
-        drv.wake()?;
-        Timer::after_millis(100).await;
-        drv.active().await?;
-        Timer::after_millis(50).await;
-        drv.passive().await?;
+        debug!("PMS5003: entering init ready mode");
+        drv.enter_ready_mode().await?;
 
-        // Flush out the ring buffer
-        let mut bytes_read = 0;
-        'flush_loop: loop {
-            let res =
-                with_timeout(Duration::from_secs(1), drv.rx.read(&mut drv.reader.buffer)).await;
-            match res {
-                Err(_) => break 'flush_loop, // Timeout
-                Ok(io_res) => {
-                    bytes_read += io_res?;
-                }
-            }
-            if bytes_read >= RX_BUFFER_SIZE {
-                break 'flush_loop;
-            }
-        }
-        if bytes_read != 0 {
-            debug!("PMS5003: drained {} bytes", bytes_read);
-        }
-
-        debug!("PMS5003: entering standby mode");
+        debug!("PMS5003: entering init standby mode");
         drv.enter_standby_mode().await?;
 
         Ok(drv)
     }
 
     pub async fn enter_standby_mode(&mut self) -> Result<(), Error> {
-        Timer::after_millis(10).await;
+        Timer::after_millis(100).await;
         self.sleep().await
     }
 
     pub async fn enter_ready_mode(&mut self) -> Result<(), Error> {
+        Timer::after_millis(100).await;
         self.wake()?;
         Timer::after_millis(100).await;
-        self.passive().await?;
-        Ok(())
+        let mut cnt = 0;
+        loop {
+            cnt += 1;
+            match self.passive().await {
+                Ok(()) => return Ok(()),
+                Err(e) => match e {
+                    Error::Timeout => {
+                        debug!("PMS5003: timeout on passive mode, retrying");
+                        if cnt >= MAX_RETRY_COUNT {
+                            warn!("PMS5003 exceeded max retry count");
+                            return Err(Error::Response);
+                        }
+                        continue;
+                    }
+                    _ => return Err(e),
+                },
+            }
+        }
     }
 
     pub async fn measure(&mut self) -> Result<Measurement, Error> {
@@ -176,6 +174,7 @@ where
     }
 
     /// Active mode - sensor reports air quality continuously
+    #[allow(unused)]
     async fn active(&mut self) -> Result<(), Error> {
         let cmd = create_command(0xe1, 1);
         self.send_cmd(&cmd)?;
@@ -203,7 +202,7 @@ where
                     "PMS5003: timeout waiting for response {=[u8]:X}",
                     expected_response.as_slice()
                 );
-                Err(Error::Response)
+                Err(Error::Timeout)
             }
         }
     }
@@ -217,10 +216,10 @@ where
             if &self.reader.buffer[..frame_size] == expected_response {
                 return Ok(());
             } else {
-                warn!(
+                debug!(
                     "PMS5003: bad response, expecting {=[u8]:X}, got {} bytes, {=[u8]:X}",
                     expected_response.as_slice(),
-                    bytes_read,
+                    frame_size,
                     self.reader.buffer[..frame_size]
                 );
             }
@@ -230,7 +229,7 @@ where
             }
         }
 
-        Err(Error::Response)
+        Err(Error::Timeout)
     }
 }
 
@@ -330,8 +329,8 @@ enum FrameReaderState {
     #[default]
     WaitingForFirstMagicNumber,
     WaitingForSecondMagicNumber,
-    WaitingForCrcMsb,
-    WaitingForCrcLsb,
+    WaitingForLenMsb,
+    WaitingForLenLsb,
     Reading,
 }
 
@@ -386,22 +385,30 @@ impl FrameReader {
                 let _ = serial.read(&mut self.buffer[1..2]).await;
                 if self.buffer[1] == MN2 {
                     self.index += 1;
-                    self.state = FrameReaderState::WaitingForCrcMsb;
+                    self.state = FrameReaderState::WaitingForLenMsb;
                 }
             }
-            FrameReaderState::WaitingForCrcMsb => {
+            FrameReaderState::WaitingForLenMsb => {
                 let _ = serial.read(&mut self.buffer[2..3]).await;
                 self.index += 1;
-                self.state = FrameReaderState::WaitingForCrcLsb;
+                self.state = FrameReaderState::WaitingForLenLsb;
             }
-            FrameReaderState::WaitingForCrcLsb => {
+            FrameReaderState::WaitingForLenLsb => {
                 let _ = serial.read(&mut self.buffer[3..4]).await;
                 self.index += 1;
                 self.frame_len = u16::from_be_bytes([self.buffer[2], self.buffer[3]]) as usize;
                 self.state = FrameReaderState::Reading;
+
+                if (HEADER_SIZE + self.frame_len) > self.buffer.len() {
+                    warn!("PMS5003 dropping invalid frame len={}", self.frame_len);
+                    self.reset();
+                }
             }
             FrameReaderState::Reading => {
-                let bytes_read = serial.read(&mut self.buffer[self.index..]).await?;
+                let tail_index = self.frame_len + HEADER_SIZE;
+                let bytes_read = serial
+                    .read(&mut self.buffer[self.index..tail_index])
+                    .await?;
 
                 self.index += bytes_read;
 
@@ -417,11 +424,20 @@ impl FrameReader {
 
                 if self.index == self.frame_len + HEADER_SIZE {
                     let frame_len = self.frame_len;
+                    trace!("PMS5003 frame complete frame_len={}", frame_len);
                     self.reset();
                     return Ok(frame_len);
                 }
             }
         }
+
+        trace!(
+            "PMS5003 state={}, frame_len={}, index={}, {=[u8]:X}",
+            self.state,
+            self.frame_len,
+            self.index,
+            &self.buffer[..self.index]
+        );
 
         Ok(0)
     }

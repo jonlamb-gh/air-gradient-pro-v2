@@ -10,3 +10,4 @@ TODO
 * update my driver forks to use defmt
 * remove unused deps in Cargo.toml, copied from example
 * doc `DEF_LOG`, currently in .cargo/config
+* fix the display async driver, occasional I2C NACK errors and timeouts

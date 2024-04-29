@@ -237,6 +237,7 @@ async fn main(spawner: Spawner) {
         DefaultPms5003::new(pms_serial, rx_buffer).await.unwrap(),
         dm_measurement_channel.sender(),
     );
+    wdt.pet();
 
     // Shared I2C2 bus, data is only shared between tasks on the same executor
     // NOTE: the SH1106 board has pullups
