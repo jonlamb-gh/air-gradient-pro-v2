@@ -1,20 +1,22 @@
 use core::cell::RefCell;
 use cortex_m::interrupt::{self, Mutex};
 use embassy_stm32::{
+    mode::Blocking,
     peripherals::USART6,
+    rcc,
     usart::{BasicInstance, UartTx},
 };
 use embedded_io::Write as IoWrite;
 use log::{Metadata, Record};
 use static_cell::StaticCell;
 
-type Inner<T> = Mutex<RefCell<UartTx<'static, T>>>;
+type Inner<T> = Mutex<RefCell<UartTx<'static, T, Blocking>>>;
 struct Logger<T: BasicInstance>(Inner<T>);
 type LoggerUsart6 = Logger<USART6>;
 
 static LOGGER: StaticCell<LoggerUsart6> = StaticCell::new();
 
-pub(crate) unsafe fn init_logger(tx: UartTx<'static, USART6>) {
+pub(crate) unsafe fn init_logger(tx: UartTx<'static, USART6, Blocking>) {
     let logger = LOGGER.init(Logger(Mutex::new(RefCell::new(tx))));
     log::set_logger(logger)
         .map(|_| log::set_max_level(log::LevelFilter::Trace))
@@ -36,6 +38,7 @@ pub(crate) unsafe fn flush_disable_logger() {
         w.set_te(false);
         w.set_re(false);
     });
+    rcc::disable::<USART6>();
 }
 
 impl<T> log::Log for Logger<T>

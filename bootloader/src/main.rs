@@ -6,7 +6,6 @@ use core::sync::atomic::{compiler_fence, Ordering::SeqCst};
 use cortex_m_rt::{entry, exception};
 use embassy_boot_stm32::*;
 use embassy_stm32::{
-    dma,
     flash::{Flash, BANK1_REGION3},
     usart::{self, UartTx},
 };
@@ -34,7 +33,7 @@ fn main() -> ! {
 
     let mut serial_config = usart::Config::default();
     serial_config.baudrate = 115_200;
-    let logger_serial = UartTx::new(p.USART6, p.PC6, dma::NoDma, serial_config).unwrap();
+    let logger_serial = UartTx::new_blocking(p.USART6, p.PC6, serial_config).unwrap();
     unsafe {
         logger::init_logger(logger_serial);
     }
