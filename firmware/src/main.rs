@@ -245,7 +245,7 @@ async fn main(spawner: Spawner) {
         Irqs,
         p.DMA1_CH7,
         p.DMA1_CH2,
-        Hertz(100_000),
+        Hertz(50_000),
         Default::default(),
     );
 

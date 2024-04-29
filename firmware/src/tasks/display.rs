@@ -20,6 +20,7 @@ pub type MessageReceiver = Receiver<'static, NoopRawMutex, Message, MESSAGE_CHAN
 /// Sometimes the display gets into a weird state if reset during flushing.
 /// TODO - figure out if this is an issue with the fork I'm using or an
 /// actually expected thing.
+/// I also dropped the I2C clock to 50K
 const RENDER_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct DisplayTaskState {
