@@ -238,7 +238,8 @@ async fn main(spawner: Spawner) {
 
     // Shared I2C2 bus, data is only shared between tasks on the same executor
     // NOTE: the SH1106 board has pullups
-    info!("Setup: I2C2");
+    const I2C_FREQ: u32 = 1_000;
+    info!("Setup: I2C2 ({=u32} Hz)", I2C_FREQ);
     let mut i2c = I2c::new(
         p.I2C2,
         p.PF1,
@@ -246,13 +247,13 @@ async fn main(spawner: Spawner) {
         Irqs,
         p.DMA1_CH7,
         p.DMA1_CH2,
-        Hertz(400_000),
+        Hertz(I2C_FREQ),
         Default::default(),
     );
 
     // Do a general call/reset
     i2c.blocking_write(0x00, &[0x06]).ok();
-    Timer::after_millis(300).await;
+    Timer::after_millis(500).await;
     wdt.pet();
 
     let i2c_bus = Mutex::new(i2c);
